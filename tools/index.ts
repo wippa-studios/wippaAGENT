@@ -7,7 +7,7 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search } from "./operations.ts"
+import { get, invalid, list, search, verify } from "./operations.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -196,6 +196,33 @@ const plugin: PluginPlugin = {
           await ctx.storage.remove(CACHE_KEY)
           const { catalog, roster } = await loadCatalog(ctx.storage, ctx.location.directory)
           return { content: invalid(catalog, roster) }
+        },
+      })
+
+      editor.add({
+        name: "verify",
+        description: "Run an acceptance command and report the real exit code, so a pass/fail verdict never rests on subagent prose.",
+        input: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "The acceptance command to run, for example 'npm test'.",
+            },
+            cwd: {
+              type: "string",
+              description: "The working directory to run the acceptance command in. Defaults to the current directory.",
+            },
+          },
+          required: ["command"],
+          additionalProperties: false,
+        },
+        options: { namespace: "wippa", codemode: false },
+        execute: async (input, context) => {
+          await context.progress({ status: "verify" })
+          const { command, cwd } = input as { command: string; cwd?: string }
+          const result = verify({ command, cwd })
+          return { content: JSON.stringify(result) }
         },
       })
     })

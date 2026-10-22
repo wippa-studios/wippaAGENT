@@ -17,7 +17,7 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search } from "./operations.ts"
+import { get, invalid, list, search, verify } from "./operations.ts"
 
 const BUNDLE_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const CATEGORIES_DIR = join(BUNDLE_ROOT, "categories")
@@ -517,4 +517,27 @@ test("invalid reports the refresh, the counts and the drift", () => {
   assert.match(output, /cached catalog was dropped and rebuilt from disk/)
   assert.match(output, new RegExp(`Agents indexed: ${catalog.agents.length}`))
   assert.match(output, /Drift against the roster/)
+})
+
+test("verify marks a passing acceptance command as ok", () => {
+  const result = verify("echo wippa-verify-passed")
+
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.ok, true)
+  assert.ok(result.stdout.includes("wippa-verify-passed"))
+})
+
+test("verify marks a failing acceptance command as not ok and keeps its real exit code", () => {
+  const result = verify("exit 3")
+
+  assert.equal(result.exitCode, 3)
+  assert.equal(result.ok, false)
+})
+
+test("verify captures the output of the acceptance command", () => {
+  const result = verify("echo wippa-verify-stderr-out >&2; exit 0")
+
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.ok, true)
+  assert.ok(result.stderr.includes("wippa-verify-stderr-out"))
 })

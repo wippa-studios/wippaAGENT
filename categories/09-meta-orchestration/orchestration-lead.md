@@ -5,10 +5,16 @@ color: "#6366f1"
 permissions:
   - action: shell
     resource: "rm -rf *"
-    effect: deny
+    effect: ask
   - action: shell
     resource: "sudo *"
     effect: deny
+  - action: shell
+    resource: "git push --force *"
+    effect: ask
+  - action: shell
+    resource: "npm install *"
+    effect: ask
 ---
 
 # Orchestration Lead

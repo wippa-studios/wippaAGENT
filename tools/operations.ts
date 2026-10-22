@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 
 import {
@@ -286,4 +287,36 @@ export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
     for (const line of drift) lines.push(`- ${line}`)
   }
   return lines.join("\n")
+}
+
+/** The verdict of one acceptance-command run. */
+export interface VerifyResult {
+  command: string
+  exitCode: number
+  ok: boolean
+  stdout: string
+  stderr: string
+}
+
+/**
+ * Runs an acceptance command through the shell and reports the real exit
+ * code, so a pass/fail verdict never rests on subagent prose.
+ */
+export function verify(command: string | { command: string; cwd?: string }, cwd?: string): VerifyResult {
+  const resolved = typeof command === "string" ? { command, cwd } : { command: command.command, cwd: command.cwd }
+  const target = resolved.command
+  const workingDir = resolved.cwd
+
+  const result = spawnSync(target, {
+    shell: true,
+    encoding: "utf8",
+    ...(workingDir ? { cwd: workingDir } : {}),
+  })
+
+  if (result.error) {
+    return { command: target, exitCode: -1, ok: false, stdout: "", stderr: String(result.error) }
+  }
+
+  const exitCode = result.status ?? -1
+  return { command: target, exitCode, ok: exitCode === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }
 }
