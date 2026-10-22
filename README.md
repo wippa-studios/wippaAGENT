@@ -156,7 +156,7 @@ The installer prints the full set of keys it expects — `default_agent`, `agent
 
 `agents.general` and `agents.explore` are set to `disabled: true` because they are OpenCode built-ins and this set supplies its own agents in their place. `agents.build` demotes the built-in coding agent to a subagent, so the orchestrator keeps control of the work and the build agent writes the code.
 
-The skill and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically. Relative paths in the `skills` and `plugins` arrays are resolved against your working directory rather than against your config file, so the installer does not write them.
+The skill and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically.
 
 Restart OpenCode after changing the config so the new roster is picked up.
 
