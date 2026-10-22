@@ -1,0 +1,6 @@
+{
+  "name": "wippa-subagent-tools",
+  "private": true,
+  "type": "module",
+  "main": "index.ts"
+}

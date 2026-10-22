@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+
+# Secrets and local environment
+.env
+.env.*
+!env.example
+
+# OS noise
+.DS_Store
+
+# Local install target.
+# .opencode/ is where `install.sh --project` writes the agent set, so a local
+# install never lands inside the repository it was installed from.
+.opencode/
+
+# Local agent scratch directory
+.agents/
+
+# Not required by OpenCode: the service registration is machine-local, and the
+# CLI preferences file is only read from the global config directory.
+service.json
+cli.json

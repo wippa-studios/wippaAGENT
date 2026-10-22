@@ -1,0 +1,74 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "agentWIPPA",
+  "permissions": [
+    {
+      "action": "subagent",
+      "resource": "*",
+      "effect": "allow"
+    }
+  ],
+  "agents": {
+    "general": {
+      "disabled": true
+    },
+    "explore": {
+      "disabled": true
+    },
+    "build": {
+      "mode": "subagent",
+      "description": "Writes and changes code. The implementation specialist \u2014 hands for substantial coding work when the parent agent delegates. Use directly only for a single well-scoped coding task.",
+      "permissions": [
+        {
+          "action": "subagent",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    }
+  },
+  "compaction": {
+    "auto": true,
+    "buffer": 10000
+  },
+  "experimental": {
+    "subagent_depth": 2
+  },
+  "mcp": {
+    "timeout": {
+      "startup": 90000,
+      "catalog": 45000
+    },
+    "servers": {
+      "github": {
+        "type": "remote",
+        "url": "https://api.githubcopilot.com/mcp/",
+        "oauth": false,
+        "headers": {
+          "Authorization": "Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}",
+          "X-MCP-Toolsets": "context,repos,issues,pull_requests,actions,code_security,notifications"
+        }
+      },
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp",
+        "oauth": false
+      },
+      "playwright": {
+        "type": "local",
+        "command": [
+          "npx",
+          "--yes",
+          "@playwright/mcp@0.0.83",
+          "--isolated"
+        ]
+      }
+    }
+  },
+  "plugins": [
+    { "package": "./tools" }
+  ],
+  "skills": [
+    "./skills"
+  ]
+}

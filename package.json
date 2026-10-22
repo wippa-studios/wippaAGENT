@@ -1,0 +1,27 @@
+{
+  "name": "wippaagent",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "wippaAGENT — one primary agent, ten subagents, three MCP servers. The only OpenCode setup you need.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wippa-studios/wippaAGENT.git"
+  },
+  "keywords": [
+    "opencode",
+    "agents",
+    "subagents",
+    "wippa",
+    "mcp",
+    "orchestration"
+  ],
+  "scripts": {
+    "test": "node --test \"**/*.test.ts\"",
+    "typecheck": "npx --yes --package typescript@5 --package @types/node -- bash -c 'bin=$(command -v tsc); root=$(dirname \"$(dirname \"$bin\")\"); tsc --noEmit -p tsconfig.json --typeRoots \"$root/@types\"'"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}
