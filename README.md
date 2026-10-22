@@ -1,40 +1,152 @@
-wippaAGENT
+<div align="center">
 
-The only opencode set up you'll need.
+<img src="brand-assets/wippaAGENT-logo.png" alt="wippaAGENT logo" width="160" />
 
-1 x Primary agent
+# wippaAGENT
 
-12 x Sub aagents
+### The only OpenCode setup you'll need.
 
-3 x MCPS
+One orchestrator. Twelve specialists. Three MCP servers.<br/>
+Install once, and every project gets the same roster, the same routing and the same review discipline.
 
-That's it.
+<br/>
 
-![wippaAGENT logo](brand-assets/wippaAGENT-logo.png)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge)](LICENSE)
+[![Built for OpenCode](https://img.shields.io/badge/built%20for-OpenCode-111827?style=for-the-badge)](https://opencode.ai)
+![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
+![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-5-f59e0b?style=for-the-badge)
 
-## What it is
+[**Quick Start**](#-quick-start) &nbsp;·&nbsp;
+[**Architecture**](#-architecture) &nbsp;·&nbsp;
+[**The Roster**](#-the-twelve-subagents) &nbsp;·&nbsp;
+[**Orchestrator**](#-how-the-orchestrator-works) &nbsp;·&nbsp;
+[**Tools**](#-the-tools) &nbsp;·&nbsp;
+[**Configuration**](#-configuration)
 
-wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it, twelve specialist subagents do the implementation and the review, three MCP servers give those agents access to GitHub, library documentation and browser automation, and a bundled plugin adds roster lookup plus an acceptance verifier. Install it once and every project you open has the same roster, the same routing table and the same review discipline.
+</div>
 
-## Install
+<br/>
+
+## At a glance
+
+<table>
+  <tr>
+    <td align="center" width="25%"><h2>1</h2><b>Primary agent</b><br/><sub>Plans, delegates, verifies</sub></td>
+    <td align="center" width="25%"><h2>12</h2><b>Subagents</b><br/><sub>Implementation and review</sub></td>
+    <td align="center" width="25%"><h2>3</h2><b>MCP servers</b><br/><sub>GitHub, docs, browser</sub></td>
+    <td align="center" width="25%"><h2>5</h2><b>Plugin tools</b><br/><sub>Roster lookup and verification</sub></td>
+  </tr>
+</table>
+
+wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup and an acceptance verifier.
+
+### Why teams use it
+
+| | |
+|---|---|
+| 🧭 **Predictable routing** | Every request is triaged into a tier, and the tier decides the chain. The choice is written into the plan, so routing is auditable. |
+| 🔒 **Orchestrator can't cut corners** | `agentWIPPA` has edit and command permissions denied by design. It can only plan, delegate and verify. |
+| ✅ **Verdicts from exit codes** | Nothing is reported as done until a reviewer has seen the diff and the acceptance command has returned a zero exit code. |
+| 📒 **Plan survives the session** | The plan ledger lives on disk at `.opencode/PLAN.md`, and the next session reads it first. |
+| 📋 **Structured reports** | Every subagent returns the same fixed schema, so the orchestrator reviews fields rather than prose. |
+
+<br/>
+
+## 🚀 Quick Start
+
+**1. Install**
 
 ```bash
 git clone https://github.com/wippa-studios/wippaAGENT.git && cd wippaAGENT && ./install.sh
 ```
 
+**2. Point OpenCode at the orchestrator**
+
+```bash
+./install.sh --apply-config
+```
+
+Or add it by hand to your `opencode.json`:
+
+```json
+{
+  "default_agent": "agentWIPPA"
+}
+```
+
+**3. Restart OpenCode**
+
+That's it. Every project you open now has the full roster.
+
+> [!TIP]
+> Not sure what the installer will do? Run `./install.sh --dry-run` first. It prints every planned action and writes nothing.
+
+<br/>
+
+## 🏗 Architecture
+
+```mermaid
+flowchart TB
+    U([You]) --> O
+
+    subgraph ORCH [" Primary agent "]
+        O["<b>agentWIPPA</b><br/>plan · delegate · verify<br/><i>no edit · no shell</i>"]
+    end
+
+    O --> L[(".opencode/PLAN.md<br/>plan ledger")]
+    O --> V{{"wippa_verify<br/>exit code = verdict"}}
+
+    O ==> S1[core-developer]
+    O ==> S2[language-specialist]
+    O ==> S3[infrastructure-engineer]
+    O ==> S4[quality-auditor]
+    O ==> S5[security-reviewer]
+    O ==> S6[debugger]
+    O ==> S7[data-engineer]
+    O ==> S8[developer-experience]
+    O ==> S9[domain-specialist]
+    O ==> S10[product-strategist]
+    O ==> S11[orchestration-lead]
+    O ==> S12[research-analyst]
+
+    S1 & S3 & S6 & S11 -.-> M1[["github"]]
+    S1 & S2 & S7 -.-> M2[["context7"]]
+    S4 & S6 -.-> M3[["playwright"]]
+```
+
+<br/>
+
+## 📦 Install
+
 The installer writes into one of two scopes.
 
-**Global** — every project on this machine. Files land in `~/.config/opencode/`.
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**🌍 Global**<br/>
+Every project on this machine.<br/>
+Files land in `~/.config/opencode/`.
 
 ```bash
 ./install.sh --global
 ```
 
-**Project-local** — a single project. Files land in `<project>/.opencode/`.
+</td>
+<td width="50%" valign="top">
+
+**📁 Project-local**<br/>
+A single project.<br/>
+Files land in `<project>/.opencode/`.
 
 ```bash
 ./install.sh --project /path/to/your/project
 ```
+
+</td>
+</tr>
+</table>
 
 With no directory argument, `--project` uses the current directory:
 
@@ -42,7 +154,10 @@ With no directory argument, `--project` uses the current directory:
 ./install.sh --project
 ```
 
-The project directory must already exist: the installer creates the `.opencode/` directory inside it, but it does not create the project itself.
+> [!NOTE]
+> The project directory must already exist. The installer creates `.opencode/` inside it, but it does not create the project itself.
+
+### Installer flags
 
 Every flag is non-interactive, so the installer runs unattended in a script or a CI job.
 
@@ -56,11 +171,31 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. |
 | `--help` | Print the usage text. |
 
-Run `./install.sh --help` for the full usage text.
+### Requirements
 
-The installer needs `bash` and the usual POSIX utilities (`cat`, `cp`, `ls`, `mkdir`, `printf`, `rm`, `rmdir`). Node is needed only when you pass `--apply-config`. It runs from any working directory, and it refuses to run if the agent definitions are missing from the checkout it was started from.
+- `bash` and the usual POSIX utilities (`cat`, `cp`, `ls`, `mkdir`, `printf`, `rm`, `rmdir`)
+- Node, **only** when you pass `--apply-config`
+- The installer runs from any working directory, and refuses to run if the agent definitions are missing from the checkout it was started from
 
-## Running OpenCode against this repository
+### What gets installed
+
+| What | From | To |
+|------|------|-----|
+| Primary agent and twelve subagents | `agentWIPPA.md` and `categories/*/*.md` | `<scope>/agents/` |
+| Subagent search skill | `skills/wippa-subagent-search/` | `<scope>/skills/wippa-subagent-search/` |
+| Tools plugin | `tools/` | `<scope>/plugins/wippa-subagent/` |
+
+`<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install. That is **13 agent files** in total: one primary agent plus twelve subagents.
+
+Agent files are copied flat. The category directory is not preserved in the destination, so the agent id is the file name: `categories/01-core-development/core-developer.md` becomes `agents/core-developer.md`. Ids stay flat and predictable. Names in the old single-specialist style, such as `python-pro`, become category-level names here, such as `core-developer`.
+
+> [!IMPORTANT]
+> Nothing else is copied. The installer never touches files it did not create, and without `--force` it skips anything that already exists rather than overwriting it.
+
+<details>
+<summary><b>Running OpenCode against this repository</b></summary>
+
+<br/>
 
 The `opencode.json` in this repository describes the installed setup, not a working checkout. `agentWIPPA.md` sits at the repository root, where OpenCode's agent discovery does not look, so a bare `opencode` run in a fresh clone finds no `agentWIPPA` and falls back to the default agent.
 
@@ -70,23 +205,13 @@ To use the repository as a live OpenCode project, install it into the checkout:
 ./install.sh --project .
 ```
 
-That creates `.opencode/` holding the agents, the skill and the tools plugin, and with `--apply-config` it merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository.
+That creates `.opencode/` holding the agents, the skill and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository.
 
-## What gets installed
+</details>
 
-| What | From | To |
-|------|------|-----|
-| Primary agent and twelve subagents | `agentWIPPA.md` and `categories/*/*.md` | `<scope>/agents/` |
-| Subagent search skill | `skills/wippa-subagent-search/` | `<scope>/skills/wippa-subagent-search/` |
-| Tools plugin | `tools/` | `<scope>/plugins/wippa-subagent/` |
+<br/>
 
-`<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install. That is 13 agent files in total: one primary agent plus twelve subagents.
-
-Agent files are copied flat: the category directory is not preserved in the destination, so the agent id is the file name. `categories/01-core-development/core-developer.md` becomes `agents/core-developer.md`. Ids stay flat and predictable — names in the old single-specialist style, such as `python-pro`, become category-level names here, such as `core-developer`.
-
-Nothing else is copied. The installer never touches files it did not create, and without `--force` it skips anything that already exists rather than overwriting it.
-
-## The twelve subagents
+## 🧑‍💻 The twelve subagents
 
 | Agent id | Category | Remit |
 |----------|----------|-------|
@@ -103,53 +228,118 @@ Nothing else is copied. The installer never touches files it did not create, and
 | `orchestration-lead` | Meta & Orchestration | Planning support, multi-domain coordination, agent installation, error recovery and the GitHub issue, pull request, CI and release workflow. |
 | `research-analyst` | Research & Analysis | Investigation, comparison, evidence gathering and written analysis, plus cheap recon passes that return a structured summary of files seen, relevant paths and key findings. |
 
-## The primary agent
+<br/>
 
-`agentWIPPA` is the orchestrator. It never edits a file and never runs a command — both permissions are denied to it by design, so it cannot bypass the roster.
+## 🎛 The primary agent
 
-What it does instead: read the request and the repository, write the plan, dispatch each piece to the subagent that owns it, read what comes back, check the result against the acceptance criterion, and report the outcome. It holds the line that nothing is reported as done until a reviewer has seen the diff and the acceptance command has returned a zero exit code — the criterion is run through `wippa_verify`, so the verdict comes from the tool's exit code rather than from any agent's prose.
+**`agentWIPPA`** is the orchestrator. It never edits a file and never runs a command. Both permissions are denied to it by design, so it cannot bypass the roster.
 
-## How the orchestrator works
+What it does instead:
+
+1. **Reads** the request and the repository
+2. **Plans** the work and writes the plan
+3. **Dispatches** each piece to the subagent that owns it
+4. **Reviews** what comes back
+5. **Checks** the result against the acceptance criterion
+6. **Reports** the outcome
+
+It holds one line without exception: nothing is reported as done until a reviewer has seen the diff and the acceptance command has returned a zero exit code. The criterion is run through `wippa_verify`, so the verdict comes from the tool's exit code rather than from any agent's prose.
+
+<br/>
+
+## ⚙️ How the orchestrator works
 
 Four behaviours separate this setup from a plain roster of agents.
 
-**Triage tiers.** Every request is classified before a plan is written, and the tier decides the chain. **Trivial** work — single-file, low-risk, no behavioural, auth, input, secret, dependency, CI or config impact — goes straight to the owning implementer with no audit pass. **Normal** work runs brief, delegate, audit, review. **High-risk** work — auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way — runs a cheap recon pass before anything is written, then a review that cannot be waived. Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so the routing is auditable.
+### 1. Triage tiers
 
-**Two-iteration reviewer cap.** The review loop — delegate, audit, revise — runs at most two iterations per piece of work. After the second iteration, if the reviewer still reports open findings, the orchestrator stops looping and escalates to you: what is still broken, what a fix would cost, and whether to accept, defer or fund another round. An open finding at report time is disclosed as an open finding, never hidden behind one more attempt.
+Every request is classified before a plan is written, and the tier decides the chain.
 
-**Plan ledger.** The plan lives on disk at `.opencode/PLAN.md` in the working directory, holding the agreed plan, the decisions made (including tier calls and tie-break routings), the work items in flight, the work items completed and the open risks — every item naming its owner subagent and its acceptance criterion. The orchestrator denies edit, so it delegates the file write with the exact content verbatim. The next session reads the ledger first, and where the ledger and the repository disagree, the repository is the truth. High-risk or structural changes are presented for approval before any code is written.
+| Tier | Applies to | Chain |
+|------|-----------|-------|
+| 🟢 **Trivial** | Single-file, low-risk work with no behavioural, auth, input, secret, dependency, CI or config impact | Straight to the owning implementer. No audit pass. |
+| 🟡 **Normal** | Everything in between | Brief → delegate → audit → review |
+| 🔴 **High-risk** | Auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way | Cheap recon pass before anything is written, then a review that cannot be waived |
 
-**Subagent return contract.** Every subagent returns the same fixed schema in its final message: files changed, commands run with their real exit codes, open risks, confidence with a statement of what would falsify it, and an optional acceptance status. The orchestrator reviews those fields rather than the prose around them, and a missing field is an incomplete report that goes back to the subagent instead of being filled in by the orchestrator.
+Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so the routing is auditable.
 
-## The three MCP servers
+### 2. Two-iteration reviewer cap
+
+```mermaid
+flowchart LR
+    A[Delegate] --> B[Audit]
+    B -->|findings| C[Revise]
+    C --> B
+    B -->|clean| D([Report done])
+    B -->|"still open after<br/>iteration 2"| E([Escalate to you])
+```
+
+The review loop runs at most **two iterations** per piece of work. After the second iteration, if the reviewer still reports open findings, the orchestrator stops looping and escalates to you with three things: what is still broken, what a fix would cost, and whether to accept, defer or fund another round. An open finding at report time is disclosed as an open finding, never hidden behind one more attempt.
+
+### 3. Plan ledger
+
+The plan lives on disk at `.opencode/PLAN.md` in the working directory. It holds:
+
+- The agreed plan
+- The decisions made, including tier calls and tie-break routings
+- The work items in flight
+- The work items completed
+- The open risks
+
+Every item names its owner subagent and its acceptance criterion. The orchestrator denies edit, so it delegates the file write with the exact content verbatim. The next session reads the ledger first, and where the ledger and the repository disagree, **the repository is the truth**. High-risk or structural changes are presented for approval before any code is written.
+
+### 4. Subagent return contract
+
+Every subagent returns the same fixed schema in its final message:
+
+| Field | Contents |
+|-------|----------|
+| **Files changed** | What was touched |
+| **Commands run** | Each command with its real exit code |
+| **Open risks** | Anything unresolved |
+| **Confidence** | A level, plus a statement of what would falsify it |
+| **Acceptance status** | Optional |
+
+The orchestrator reviews those fields rather than the prose around them. A missing field is an incomplete report that goes back to the subagent, never one the orchestrator fills in itself.
+
+<br/>
+
+## 🔌 The three MCP servers
 
 | Server | What it gives the agents |
 |--------|---------------------------|
-| `github` | Repositories, pull requests, issues, actions and code security through the GitHub API. |
-| `context7` | Version-matched documentation for libraries and frameworks, so guidance matches the version in the lockfile. |
-| `playwright` | Browser automation: navigate, interact and read the rendered page. |
+| **`github`** | Repositories, pull requests, issues, actions and code security through the GitHub API. |
+| **`context7`** | Version-matched documentation for libraries and frameworks, so guidance matches the version in the lockfile. |
+| **`playwright`** | Browser automation: navigate, interact and read the rendered page. |
 
 The GitHub server expects `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment. The Playwright server runs locally through `npx`.
 
-## The tools
+<br/>
+
+## 🧰 The tools
 
 The bundled plugin adds five tools: four for finding and reading the roster, and one for checking work.
 
 | Tool | Question it answers |
 |------|---------------------|
-| `wippa_subagent_search` | Which agents match this task, by name, by category or by a word from their description. |
-| `wippa_subagent_get` | What exactly does one agent do: full definition, prompt and permissions. |
-| `wippa_subagent_list` | What is available at all, organised by category. |
+| `wippa_subagent_search` | Which agents match this task, by name, by category or by a word from their description? |
+| `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
+| `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
 | `wippa_verify` | Did the acceptance command pass? Runs it and returns the real exit code with the stdout and stderr, so a pass/fail verdict never rests on prose. |
 
 The `wippa-subagent-search` skill documents the four roster tools, explains which one to reach for, and gives the equivalent procedure using `read`, `glob` and `grep` when the plugin is not connected.
 
-## Configuration
+<br/>
+
+## 🛠 Configuration
 
 The agent set is inert until `default_agent` points at the orchestrator. Add it to the config file for the scope you installed into.
 
-Global config lives at `~/.config/opencode/opencode.json`:
+| Scope | Config file |
+|-------|-------------|
+| Global | `~/.config/opencode/opencode.json` |
+| Project-local | `<project>/.opencode/opencode.json` |
 
 ```json
 {
@@ -157,24 +347,52 @@ Global config lives at `~/.config/opencode/opencode.json`:
 }
 ```
 
-Project-local config lives at `<project>/.opencode/opencode.json`:
+The installer prints the full set of keys it expects after it finishes: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept.
 
-```json
-{
-  "default_agent": "agentWIPPA"
-}
-```
+<details>
+<summary><b>What each key does</b></summary>
 
-The installer prints the full set of keys it expects — `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers` — after it finishes. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept.
+<br/>
 
-`env.example` documents the environment variables the setup expects: `GITHUB_PERSONAL_ACCESS_TOKEN` for the `github` MCP server, plus `WIPPA_AGENT_REGISTRY` and `WIPPA_AGENT_DIR`. Export them in the shell before starting OpenCode. `opencode debug config` resolves and prints the value of `GITHUB_PERSONAL_ACCESS_TOKEN` in clear text — treat that output as a secret and do not paste it into an issue or a chat.
-
-`agents.general` and `agents.explore` are set to `disabled: true` because they are OpenCode built-ins and this set supplies its own agents in their place. `agents.build` demotes the built-in coding agent to a subagent, so the orchestrator keeps control of the work and the build agent writes the code.
+| Key | Purpose |
+|-----|---------|
+| `default_agent` | Makes `agentWIPPA` the entry point for every session. |
+| `agents.general` | Set to `disabled: true`. It is an OpenCode built-in, and this set supplies its own agents in its place. |
+| `agents.explore` | Set to `disabled: true`, for the same reason. |
+| `agents.build` | Demotes the built-in coding agent to a subagent, so the orchestrator keeps control of the work and the build agent writes the code. |
+| `mcp.servers` | Registers the `github`, `context7` and `playwright` servers. |
 
 The skill and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically.
 
+</details>
+
+### Environment variables
+
+`env.example` documents the variables the setup expects. Export them in the shell before starting OpenCode.
+
+| Variable | Used by |
+|----------|---------|
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | The `github` MCP server |
+| `WIPPA_AGENT_REGISTRY` | See `env.example` |
+| `WIPPA_AGENT_DIR` | See `env.example` |
+
+> [!WARNING]
+> `opencode debug config` resolves and prints the value of `GITHUB_PERSONAL_ACCESS_TOKEN` in clear text. Treat that output as a secret, and do not paste it into an issue or a chat.
+
 Restart OpenCode after changing the config so the new roster is picked up.
 
-## License
+<br/>
 
-MIT. See `LICENSE`.
+## 📄 License
+
+Released under the **MIT License**. See [`LICENSE`](LICENSE) for details.
+
+<br/>
+
+<div align="center">
+
+**wippaAGENT** &nbsp;·&nbsp; built by [wippa-studios](https://github.com/wippa-studios)
+
+<sub>One setup. Every project. Same discipline.</sub>
+
+</div>
