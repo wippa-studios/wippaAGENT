@@ -5,7 +5,7 @@ description: Discover, inspect, and refresh wippaAGENT subagents. Use this skill
 
 # wippaAGENT Subagent Search
 
-This skill lets you find and inspect wippaAGENT subagents so you can pick the right one for a task, explain what an agent does, or confirm it exists before delegating to it. It wraps four tools. Each answers a different question, so choosing the right one keeps lookups fast and avoids pulling large definitions into context unnecessarily. If the tools are not connected in your session, the last section gives the equivalent procedure using read, glob, and grep.
+This skill lets you find and inspect wippaAGENT subagents so you can pick the right one for a task, explain what an agent does, or confirm it exists before delegating to it. It wraps the four roster tools. Each answers a different question, so choosing the right one keeps lookups fast and avoids pulling large definitions into context unnecessarily. If the tools are not connected in your session, the last section gives the equivalent procedure using read, glob, and grep.
 
 ## Tools
 
@@ -85,11 +85,11 @@ Approach: `wippa_subagent_invalid`, then `wippa_subagent_search` for "data-clean
 
 ## If the tools are not available
 
-The four tools above are the wired-up contract. If they are not available in your session — for example the plugin is not loaded — the same four operations map onto the read, glob, and grep permissions you already have:
+The four roster tools above are the wired-up contract. If they are not available in your session — for example the plugin is not loaded — the same four operations map onto the read, glob, and grep permissions you already have:
 
 - `wippa_subagent_search` — grep the agent directories for the query, matching filenames, category directories and the `description:` frontmatter.
 - `wippa_subagent_get` — read the matching agent file and summarise it per *Reporting results*; return it verbatim only when asked.
-- `wippa_subagent_list` — read the `## Your complete roster` section of the `agentWIPPA` agent file for the categories, and the agent files for the descriptions.
+- `wippa_subagent_list` — read the `## Your roster` section of the `agentWIPPA` agent file for the categories, and the agent files for the descriptions.
 - `wippa_subagent_invalid` — re-scan the directories and report the drift against the roster.
 
 Agent definitions live in one of these places:
@@ -101,4 +101,4 @@ Agent definitions live in one of these places:
 
 The installer flattens the tree on install, so the agent id is the file name without `.md` in either shape. In an installed scope, `<scope>` is the project `.opencode/` directory or the global `~/.config/opencode/` directory.
 
-The catalogue now holds ten subagents, so the tools are needed mainly for full definitions and for refreshing a stale catalogue, not for discovering an unknown agent.
+The catalogue now holds twelve subagents, so the tools are needed mainly for full definitions and for refreshing a stale catalogue, not for discovering an unknown agent.

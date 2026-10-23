@@ -32,7 +32,7 @@
     "buffer": 10000
   },
   "experimental": {
-    "subagent_depth": 2
+    "subagent_depth": 1
   },
   "mcp": {
     "timeout": {

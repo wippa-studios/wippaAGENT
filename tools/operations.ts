@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
+import { resolve } from "node:path"
 
 import {
   categorySlug,
@@ -273,7 +274,7 @@ export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
   const lines = [
     "## Subagent cache refreshed",
     "",
-    "- Cache cleared: yes, the cached catalog was dropped and rebuilt from disk.",
+    "- The cached catalog was dropped and rebuilt from disk.",
     `- Agents indexed: ${catalog.agents.length}`,
     `- Directories scanned: ${catalog.dirs.length}`,
     `- Fingerprint: ${fingerprint(catalog)}`,
@@ -294,29 +295,140 @@ export interface VerifyResult {
   command: string
   exitCode: number
   ok: boolean
+  /**
+   * Why the command produced no normal exit code: `timeout`, `output-limit`,
+   * `spawn-error` or `cwd-not-found`. Absent when the command ran to a verdict,
+   * including a non-zero exit code, which is reported through `exitCode`.
+   */
+  reason?: string
   stdout: string
   stderr: string
+  /** The absolute working directory the command ran in. */
+  cwd: string
+}
+
+/** Everything one acceptance-command run accepts. */
+export interface VerifyOptions {
+  command: string
+  cwd?: string
+  timeoutMs?: number
+  maxBuffer?: number
+  outputLimit?: number
+}
+
+// An acceptance command can legitimately take minutes, so the default timeout
+// is generous; the bounds keep a caller from passing 0 or a day by accident.
+const VERIFY_TIMEOUT_DEFAULT_MS = 300_000
+const VERIFY_TIMEOUT_MIN_MS = 1_000
+const VERIFY_TIMEOUT_MAX_MS = 3_600_000
+const VERIFY_MAX_BUFFER_DEFAULT = 32 * 1024 * 1024
+const VERIFY_OUTPUT_LIMIT_DEFAULT = 32 * 1024
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** Clamps a numeric option to its range; a missing or non-finite value takes the default. */
+function clampOption(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+/**
+ * Caps one stream at `limit` characters, keeping the head and the tail: a
+ * failing command prints its reason last, so a tail-only cut would hide the
+ * output the verdict rests on.
+ */
+function truncateOutput(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  const keep = Math.floor(limit / 2)
+  const head = text.slice(0, keep)
+  const tail = text.slice(text.length - keep)
+  return `${head}\n…[truncated: kept first ${keep} and last ${keep} of ${text.length} characters]…\n${tail}`
 }
 
 /**
  * Runs an acceptance command through the shell and reports the real exit
  * code, so a pass/fail verdict never rests on subagent prose.
  */
-export function verify(command: string | { command: string; cwd?: string }, cwd?: string): VerifyResult {
-  const resolved = typeof command === "string" ? { command, cwd } : { command: command.command, cwd: command.cwd }
-  const target = resolved.command
-  const workingDir = resolved.cwd
+export function verify(command: string | VerifyOptions, cwd?: string): VerifyResult {
+  const options: VerifyOptions = typeof command === "string" ? { command, cwd } : command
+  const target = options.command
+
+  const timeoutMs = clampOption(
+    options.timeoutMs,
+    VERIFY_TIMEOUT_DEFAULT_MS,
+    VERIFY_TIMEOUT_MIN_MS,
+    VERIFY_TIMEOUT_MAX_MS,
+  )
+  const maxBuffer = clampOption(
+    options.maxBuffer,
+    VERIFY_MAX_BUFFER_DEFAULT,
+    1_024,
+    Number.MAX_SAFE_INTEGER,
+  )
+  const outputLimit = clampOption(
+    options.outputLimit,
+    VERIFY_OUTPUT_LIMIT_DEFAULT,
+    64,
+    Number.MAX_SAFE_INTEGER,
+  )
+
+  const workingDir = options.cwd === undefined ? process.cwd() : resolve(options.cwd)
+  if (!isDirectory(workingDir)) {
+    return {
+      command: target,
+      exitCode: -1,
+      ok: false,
+      reason: "cwd-not-found",
+      stdout: "",
+      stderr: `The working directory does not exist or is not a directory: ${workingDir}`,
+      cwd: workingDir,
+    }
+  }
 
   const result = spawnSync(target, {
     shell: true,
     encoding: "utf8",
-    ...(workingDir ? { cwd: workingDir } : {}),
+    cwd: workingDir,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer,
   })
 
   if (result.error) {
-    return { command: target, exitCode: -1, ok: false, stdout: "", stderr: String(result.error) }
+    // Verified against Node 24: a timeout sets error.code to ETIMEDOUT, status
+    // to null and keeps the partial stdout/stderr of the killed process;
+    // exceeding maxBuffer sets ENOBUFS. Anything else, a missing code included,
+    // is a spawn failure and carries the error itself.
+    const code = (result.error as NodeJS.ErrnoException).code
+    const reason = code === "ETIMEDOUT" ? "timeout" : code === "ENOBUFS" ? "output-limit" : "spawn-error"
+    const stderr = result.stderr ?? ""
+    return {
+      command: target,
+      exitCode: -1,
+      ok: false,
+      reason,
+      stdout: truncateOutput(result.stdout ?? "", outputLimit),
+      stderr: truncateOutput(
+        reason === "spawn-error" ? [String(result.error), stderr].filter(Boolean).join("\n") : stderr,
+        outputLimit,
+      ),
+      cwd: workingDir,
+    }
   }
 
   const exitCode = result.status ?? -1
-  return { command: target, exitCode, ok: exitCode === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }
+  return {
+    command: target,
+    exitCode,
+    ok: exitCode === 0,
+    stdout: truncateOutput(result.stdout ?? "", outputLimit),
+    stderr: truncateOutput(result.stderr ?? "", outputLimit),
+    cwd: workingDir,
+  }
 }

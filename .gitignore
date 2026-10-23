@@ -17,7 +17,7 @@ coverage/
 
 # Local install target.
 # .opencode/ is where `install.sh --project` writes the agent set, so a local
-# install never lands inside the repository it was installed from.
+# install is never committed to the repository it was installed from.
 .opencode/
 
 # Local agent scratch directory

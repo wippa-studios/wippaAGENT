@@ -9,9 +9,6 @@ permissions:
   - action: shell
     resource: "sudo *"
     effect: deny
-  - action: shell
-    resource: "*"
-    effect: deny
 ---
 
 # Quality Auditor

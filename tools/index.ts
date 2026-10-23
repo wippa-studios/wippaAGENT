@@ -1,13 +1,16 @@
+import { resolve } from "node:path"
+
 import {
   buildCatalog,
   fingerprint,
   readRoster,
   resolveAgentDirs,
+  rosterFingerprint,
   scanFingerprint,
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search, verify } from "./operations.ts"
+import { get, invalid, list, search, verify, type VerifyResult } from "./operations.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -60,6 +63,8 @@ interface PluginContext {
 }
 
 const CACHE_KEY = "catalog"
+const COMMAND_MAX_LENGTH = 10_000
+const LIMIT_MAX = 1_000
 
 // The storage API is awaited, so it may be synchronous or asynchronous.
 interface StorageLike {
@@ -70,6 +75,12 @@ interface StorageLike {
 
 interface CachedCatalog {
   fingerprint: string
+  /**
+   * Fingerprint of the roster. The category fields of a catalog are read from
+   * the roster at build time, and a roster edit leaves every agent file
+   * untouched, so the file fingerprint alone cannot see it.
+   */
+  rosterFingerprint: string
   catalog: Catalog
 }
 
@@ -79,22 +90,48 @@ interface LoadedCatalog {
 }
 
 /**
- * Reads the cached catalog, rebuilding it when the cache is missing or when the
- * files on disk no longer match the fingerprint the cache was built from.
+ * Reads the cached catalog, rebuilding it when the cache is missing or when
+ * the files on disk or the roster no longer match what the cache was built
+ * from.
  */
 async function loadCatalog(storage: StorageLike, cwd: string): Promise<LoadedCatalog> {
   const dirs = resolveAgentDirs(cwd)
   const roster = readRoster(dirs)
+  const rosterDigest = rosterFingerprint(dirs)
 
   const cached = (await storage.get(CACHE_KEY)) as CachedCatalog | undefined
-  if (cached && cached.catalog && cached.fingerprint === scanFingerprint(dirs)) {
+  if (
+    cached &&
+    cached.catalog &&
+    cached.fingerprint === scanFingerprint(dirs) &&
+    cached.rosterFingerprint === rosterDigest
+  ) {
     return { catalog: cached.catalog, roster }
   }
 
   const catalog = buildCatalog(dirs)
-  const entry: CachedCatalog = { fingerprint: fingerprint(catalog), catalog }
+  const entry: CachedCatalog = {
+    fingerprint: fingerprint(catalog),
+    rosterFingerprint: rosterDigest,
+    catalog,
+  }
   await storage.set(CACHE_KEY, entry)
   return { catalog, roster }
+}
+
+/**
+ * Coerces a tool-input limit to an integer in 1..1000. A missing or non-finite
+ * value takes the caller's default, which is what an unset optional field is.
+ */
+function coerceLimit(value: unknown, fallback: number | undefined): number | undefined {
+  const number = typeof value === "number" ? value : Number.NaN
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(LIMIT_MAX, Math.max(1, Math.floor(number)))
+}
+
+/** A tool input is untrusted: a non-string is treated as absent, not coerced. */
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : ""
 }
 
 const plugin: PluginPlugin = {
@@ -103,7 +140,8 @@ const plugin: PluginPlugin = {
     await ctx.tool.transform((editor) => {
       editor.namespace({
         name: "wippa",
-        description: "Find, inspect and refresh the wippaAGENT subagent catalog.",
+        description:
+          "Find, inspect and refresh the wippaAGENT subagent catalog, and run acceptance commands with a real exit code.",
       })
 
       editor.add({
@@ -127,9 +165,9 @@ const plugin: PluginPlugin = {
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "subagent_search" })
-          const { query, limit } = input as { query: string; limit?: number }
+          const { query, limit } = input as { query?: unknown; limit?: unknown }
           const { catalog } = await loadCatalog(ctx.storage, ctx.location.directory)
-          return { content: search(catalog, query, limit ?? 20) }
+          return { content: search(catalog, asString(query), coerceLimit(limit, 20)) }
         },
       })
 
@@ -150,9 +188,9 @@ const plugin: PluginPlugin = {
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "subagent_get" })
-          const { id } = input as { id: string }
+          const { id } = input as { id?: unknown }
           const { catalog } = await loadCatalog(ctx.storage, ctx.location.directory)
-          return { content: get(catalog, id) }
+          return { content: get(catalog, asString(id)) }
         },
       })
 
@@ -176,9 +214,10 @@ const plugin: PluginPlugin = {
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "subagent_list" })
-          const { category, limit } = input as { category?: string; limit?: number }
+          const { category, limit } = input as { category?: unknown; limit?: unknown }
           const { catalog, roster } = await loadCatalog(ctx.storage, ctx.location.directory)
-          return { content: list(catalog, roster, category, limit) }
+          const coerced = coerceLimit(limit, undefined)
+          return { content: list(catalog, roster, asString(category), coerced) }
         },
       })
 
@@ -220,8 +259,28 @@ const plugin: PluginPlugin = {
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "verify" })
-          const { command, cwd } = input as { command: string; cwd?: string }
-          const result = verify({ command, cwd })
+          const { command, cwd } = input as { command?: unknown; cwd?: unknown }
+          const location = resolve(ctx.location.directory)
+          if (
+            typeof command !== "string" ||
+            command.trim().length === 0 ||
+            command.length > COMMAND_MAX_LENGTH
+          ) {
+            const failure: VerifyResult = {
+              command: "",
+              exitCode: -1,
+              ok: false,
+              reason: "invalid-command",
+              stdout: "",
+              stderr: `command must be a non-empty string of at most ${COMMAND_MAX_LENGTH} characters`,
+              cwd: location,
+            }
+            return { content: JSON.stringify(failure) }
+          }
+          // The default is the location directory, not the server process cwd,
+          // and a relative cwd is resolved against it.
+          const workingDir = typeof cwd === "string" && cwd.trim() ? resolve(location, cwd) : location
+          const result = verify(command, workingDir)
           return { content: JSON.stringify(result) }
         },
       })

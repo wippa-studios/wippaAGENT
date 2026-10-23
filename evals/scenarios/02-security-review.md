@@ -14,7 +14,7 @@ agentWIPPA
 
 ## Expected subagent(s)
 
-quality-auditor
+security-reviewer
 
 ## Acceptance criteria
 

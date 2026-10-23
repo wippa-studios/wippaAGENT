@@ -1,0 +1,240 @@
+import assert from "node:assert/strict"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { test } from "node:test"
+
+import plugin from "./index.ts"
+
+// ---------------------------------------------------------------- fake host
+
+// The plugin's context, editor and tool types are declared in index.ts but not
+// exported, and this test drives the plugin through its real entry point rather
+// than a copy of those types. The fake host is therefore cast once, here.
+
+interface FakeToolDefinition {
+  name: string
+  description: string
+  input: {
+    type: string
+    properties: Record<string, { type: string; description?: string }>
+    required?: string[]
+    additionalProperties?: boolean
+  }
+  options?: { namespace?: string; codemode?: boolean }
+  execute(
+    input: unknown,
+    context: { progress: (update: { status: string }) => Promise<void> },
+  ): Promise<{ content: string }>
+}
+
+interface FakeEditor {
+  namespace(namespace: { name: string; description?: string }): void
+  add(tool: FakeToolDefinition): void
+}
+
+interface FakeContext {
+  location: { directory: string }
+  storage: {
+    get(key: string): Promise<unknown>
+    set(key: string, value: unknown): Promise<void>
+    remove(key: string): Promise<void>
+  }
+  tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
+}
+
+const setup = plugin.setup as unknown as (context: FakeContext) => Promise<void> | void
+
+interface FakeHost {
+  context: FakeContext
+  tools: FakeToolDefinition[]
+  namespace(): { name: string; description?: string } | undefined
+}
+
+function fakeHost(directory: string): FakeHost {
+  const cache = new Map<string, unknown>()
+  const tools: FakeToolDefinition[] = []
+  let namespace: { name: string; description?: string } | undefined
+
+  const context: FakeContext = {
+    location: { directory },
+    storage: {
+      async get(key) {
+        return cache.get(key)
+      },
+      async set(key, value) {
+        cache.set(key, value)
+      },
+      async remove(key) {
+        cache.delete(key)
+      },
+    },
+    tool: {
+      async transform(callback) {
+        callback({
+          namespace(value) {
+            namespace = value
+          },
+          add(tool) {
+            tools.push(tool)
+          },
+        })
+      },
+    },
+  }
+
+  return { context, tools, namespace: () => namespace }
+}
+
+async function runTool(host: FakeHost, name: string, input: unknown): Promise<string> {
+  const tool = host.tools.find((entry) => entry.name === name)
+  assert.ok(tool, `${name} is registered`)
+  const result = await tool.execute(input, { progress: async () => {} })
+  return result.content
+}
+
+// ---------------------------------------------------------------- fixture
+
+function probeAgent(description: string): string {
+  return `---\ndescription: ${description}\nmode: subagent\n---\n\nProbe body.\n`
+}
+
+function probeRoster(category: string): string {
+  return [
+    "## Your roster",
+    "",
+    "Three probe agents.",
+    "",
+    "| Agent | Category | Covers |",
+    "| --- | --- | --- |",
+    `| \`probe-alpha\` | ${category} | probing |`,
+    `| \`probe-beta\` | ${category} | probing |`,
+    `| \`probe-gamma\` | ${category} | probing |`,
+    "",
+  ].join("\n")
+}
+
+/** A project scope with three flat agents and a roster, as install.sh writes it. */
+function probeFixture(rosterBeside = false): { root: string; agents: string; roster: string } {
+  const root = mkdtempSync(join(tmpdir(), "wippa-plugin-"))
+  const agents = join(root, "agents")
+  mkdirSync(agents, { recursive: true })
+  writeFileSync(join(agents, "probe-alpha.md"), probeAgent("Alpha probe agent."))
+  writeFileSync(join(agents, "probe-beta.md"), probeAgent("Beta probe agent."))
+  writeFileSync(join(agents, "probe-gamma.md"), probeAgent("Gamma probe agent."))
+
+  const roster = rosterBeside ? join(root, "agentWIPPA.md") : join(agents, "agentWIPPA.md")
+  writeFileSync(roster, probeRoster("Probe Group"))
+  return { root, agents, roster }
+}
+
+// ---------------------------------------------------------------- tests
+
+test("setup registers the five wippa tools in the wippa namespace", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  assert.equal(plugin.id, "wippa-subagent-tools")
+  assert.deepEqual(
+    host.tools.map((tool) => tool.name),
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify"],
+  )
+  for (const tool of host.tools) {
+    assert.deepEqual(tool.options, { namespace: "wippa", codemode: false })
+    assert.equal(tool.input.type, "object")
+    assert.ok(tool.description.length > 0, `${tool.name} carries a description`)
+  }
+  assert.deepEqual(host.tools.find((tool) => tool.name === "subagent_search")?.input.required, [
+    "query",
+  ])
+  assert.deepEqual(host.tools.find((tool) => tool.name === "verify")?.input.required, ["command"])
+
+  assert.equal(host.namespace()?.name, "wippa")
+  assert.equal(
+    host.namespace()?.description,
+    "Find, inspect and refresh the wippaAGENT subagent catalog, and run acceptance commands with a real exit code.",
+  )
+})
+
+test("subagent_search returns a match for a fixture agent", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "subagent_search", { query: "probe-alpha" })
+  assert.match(content, /`probe-alpha`/)
+  assert.match(content, /Alpha probe agent\./)
+})
+
+test("subagent_list groups the fixture agents by their roster category", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "subagent_list", {})
+  assert.match(content, /## Probe Group \(3\)/)
+  assert.match(content, /`probe-beta`/)
+})
+
+test("verify runs an acceptance command and returns the verdict as JSON", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "verify", { command: "echo wippa-plugin-verify" })
+  const result = JSON.parse(content)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.exitCode, 0)
+  assert.ok(result.stdout.includes("wippa-plugin-verify"))
+  assert.equal(result.cwd, root, "the location directory is the default working directory")
+})
+
+test("verify rejects a bad command without spawning anything", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const bad of ["", "   ", "x".repeat(10_001), 42, undefined]) {
+    const result = JSON.parse(await runTool(host, "verify", { command: bad }))
+    assert.equal(result.ok, false, `${String(bad).slice(0, 20)} is rejected`)
+    assert.equal(result.exitCode, -1)
+    assert.equal(result.reason, "invalid-command")
+    assert.equal(result.command, "")
+    assert.match(result.stderr, /command must be a non-empty string of at most 10000 characters/)
+    assert.equal(result.cwd, root)
+  }
+})
+
+test("editing the roster invalidates the cached catalog", async () => {
+  const { root, roster } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.match(first, /## Probe Group \(3\)/)
+
+  writeFileSync(roster, probeRoster("Renamed Group"))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.match(second, /## Renamed Group \(3\)/)
+  assert.ok(!second.includes("## Probe Group"), "the cached category fields are not reused")
+})
+
+test("a roster beside the agents directory still invalidates the cache", async () => {
+  // The roster is not itself an agent file here, so only the roster
+  // fingerprint can see the edit and force a rebuild.
+  const { root, roster } = probeFixture(true)
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.match(first, /## Probe Group \(3\)/)
+
+  writeFileSync(roster, probeRoster("Beside Renamed"))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.match(second, /## Beside Renamed \(3\)/)
+  assert.ok(!second.includes("## Probe Group"), "the cached category fields are not reused")
+})

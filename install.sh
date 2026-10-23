@@ -161,6 +161,10 @@ else
   TARGET_DIR="$BASE_DIR/.opencode"
 fi
 
+if [ "$SCOPE" = "global" ] && [ "$(id -u)" -eq 0 ]; then
+  say "note: running as root — installed files will be owned by root"
+fi
+
 AGENTS_DIR="$TARGET_DIR/agents"
 SKILLS_DIR="$TARGET_DIR/skills"
 PLUGINS_DIR="$TARGET_DIR/plugins"
@@ -168,13 +172,13 @@ CONFIG_FILE="$TARGET_DIR/opencode.json"
 
 # ------------------------------------------------------------------ helpers
 
-# Compare two files without shelling out. Returns 0 when they are identical.
+# Compare two files byte for byte with cmp. Returns 0 when they are identical.
 files_equal() {
   local left="$1"
   local right="$2"
   [ -f "$left" ] || return 1
   [ -f "$right" ] || return 1
-  [ "$(<"$left")" = "$(<"$right")" ]
+  cmp -s "$left" "$right"
 }
 
 # Copy one file, honouring --force and --dry-run.
@@ -443,7 +447,19 @@ put(servers, 'playwright', {
 // would resolve against the user's working directory rather than against the
 // location of their config file.
 
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+const tempPath = `${configPath}.tmp-${process.pid}`;
+try {
+  fs.writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  fs.renameSync(tempPath, configPath);
+} catch (error) {
+  try {
+    fs.unlinkSync(tempPath);
+  } catch {
+    // The temp file may not exist when the write itself failed.
+  }
+  console.error(`error: could not write ${configPath}: ${error.message}`);
+  process.exit(1);
+}
 
 for (const label of added) {
   console.log(`  added      ${label}`);

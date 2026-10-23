@@ -29,9 +29,9 @@ OpenCode V2 as documented on 2026-10-23.
 
 | Capability | Status | How it is satisfied today | If a gap: build or adopt | Concrete deliverable |
 |---|---|---|---|---|
-| Test runner execution | Partial | `package.json` → `scripts.test` is `node --test "**/*.test.ts"`, run by a subagent through `shell`. The primary agent cannot run it: `agentWIPPA.md` sends the acceptance command to a subagent and checks the exit code in the report. | — | No artefact today. The runner exists at `package.json` → `scripts.test`; only the result format is missing. |
+| Test runner execution | Partial | `package.json` → `scripts.test` is `node --test "**/*.test.ts"`, run by a subagent through `shell`. The primary agent cannot run it through `shell`: `agentWIPPA.md` hands the acceptance command to the `wippa_verify` tool, which runs it and returns the real exit code. | — | No artefact today. The runner exists at `package.json` → `scripts.test`; only the result format is missing. |
 | Structured test results (machine-readable summary) | Gap | `shell` returns the raw runner output as text. Nothing in the bundle parses it into counts, failed test names or a verdict. | Build | `tools/wippa-test-report.ts` — see the Build list. |
-| Linter, formatter and type-check runners | Gap | The bundle ships no linter, formatter or type-check configuration, and `opencode.json` has no `formatter` key, so OpenCode does not format files after a write. `shell` can only reach a runner that the user's own project installs, which is not a capability this bundle provides. | Build | `tools/wippa-quality-report.ts` — see the Build list. Add `"formatter": true` to `opencode.json` to enable the built-in post-write formatter as well. |
+| Linter, formatter and type-check runners | Gap | The bundle ships no linter or formatter configuration, and `opencode.json` has no `formatter` key, so OpenCode does not format files after a write. It does ship `tsconfig.json` and a `typecheck` script for its own tools. | Build | `tools/wippa-quality-report.ts` — see the Build list. Add `"formatter": true` to `opencode.json` to enable the built-in post-write formatter as well. |
 | Coverage reports | Partial | `shell` can run `node --test --experimental-test-coverage`, which the Node version required by `package.json` → `engines.node` supports. The bundle holds no coverage configuration and no report artefact. | — | No artefact today; `shell` with `node --test --experimental-test-coverage` is the only route, and `tools/wippa-quality-report.ts` returns the same run as structured data. |
 | Browser automation (Playwright) for UI verification | Covered | The `playwright` MCP server is configured at `opencode.json` → `mcp.servers.playwright` as a local server running `npx --yes @playwright/mcp@0.0.83 --isolated`. | — | Already live. `opencode.json` → `mcp.servers.playwright`. |
 
@@ -48,8 +48,8 @@ OpenCode V2 as documented on 2026-10-23.
 
 | Capability | Status | How it is satisfied today | If a gap: build or adopt | Concrete deliverable |
 |---|---|---|---|---|
-| Subagent search, get, list and cache refresh | Covered | The four tools are implemented in `tools/index.ts`, registered under the namespace `wippa` with `codemode: false`, and surface natively as `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list` and `wippa_subagent_invalid`. The catalog is cached in `ctx.storage` and rebuilt when the on-disk fingerprint changes. | — | Already live. `tools/index.ts`, with the contract documented in `skills/wippa-subagent-search/SKILL.md`. |
-| Task delegation with result collection | Covered | The built-in `subagent` tool starts a child session and returns its result, in the foreground or in the background. `opencode.json` → `experimental.subagent_depth` is `2`, so a subagent may start one further level. A plugin can drive the same path with `ctx.session.create`, `ctx.session.prompt` and `ctx.session.wait`. | — | Already live. `agentWIPPA.md` allows `subagent` on `*` and denies `edit` and `shell`. |
+| Subagent search, get, list and cache refresh | Covered | The four roster tools are implemented in `tools/index.ts`, registered under the namespace `wippa` with `codemode: false`, and surface natively as `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list` and `wippa_subagent_invalid`; the fifth tool is `wippa_verify`, described in section 3. The catalog is cached in `ctx.storage` and rebuilt when the on-disk fingerprint changes. | — | Already live. `tools/index.ts`, with the contract documented in `skills/wippa-subagent-search/SKILL.md`. |
+| Task delegation with result collection | Covered | The built-in `subagent` tool starts a child session and returns its result, in the foreground or in the background. In this repository, `opencode.json` → `experimental.subagent_depth` is `1`, so a subagent cannot start another subagent; `install.sh --apply-config` does not write this key, and OpenCode's default is also 1, so an installed scope behaves the same. A plugin can drive the same path with `ctx.session.create`, `ctx.session.prompt` and `ctx.session.wait`. | — | Already live. `agentWIPPA.md` allows `subagent` on `*` and denies `edit` and `shell`. |
 | Planning and task-tracking tools | Partial | Planning is a step of the orchestrator workflow described in `agentWIPPA.md`, not a tool. The built-in `todowrite` tool is not enabled, because `opencode.json` → `experimental` sets only `subagent_depth`. | — | Add `"todo": true` to `opencode.json` → `experimental`, which enables the `todowrite` tool. |
 
 ## 6. Data and infrastructure
@@ -80,8 +80,8 @@ OpenCode V2 as documented on 2026-10-23.
 
 | Capability | Status | How it is satisfied today | If a gap: build or adopt | Concrete deliverable |
 |---|---|---|---|---|
-| Secrets lookup that never exposes values to the model | Gap | The bundle has no secret broker. `env.example` lists variable names with empty values, and `service.json` holds only the placeholder `{env:WIPPA_SERVICE_PASSWORD}`. | Adopt MCP | `opencode.json` → `mcp.servers.onepassword` — `{ "type": "local", "command": ["1password-mcp"] }`. The 1Password desktop app's MCP server returns environment and variable names and never stored values. |
-| Permission rules and command allowlists | Partial | The bundle already uses ordered rules. `opencode.json` → `permissions` allows `subagent` on `*`; the frontmatter of `agentWIPPA.md` denies `edit` and `shell`; every definition under `categories/` denies `shell` on `rm -rf *` and `sudo *`. The top-level `policies` block, which hard-denies, is not set. | — | Add `"policies": [{ "action": "tool.use", "resource": "shell:rm -rf *", "effect": "deny" }]` to `opencode.json`. A plugin asserts the same through `ctx.permission.assert`. |
+| Secrets lookup that never exposes values to the model | Gap | The bundle has no secret broker. `env.example` lists the variable names with empty values, and no secret store or service registration is shipped in the bundle. | Adopt MCP | `opencode.json` → `mcp.servers.onepassword` — `{ "type": "local", "command": ["1password-mcp"] }`. The 1Password desktop app's MCP server returns environment and variable names and never stored values. |
+| Permission rules and command allowlists | Partial | The bundle already uses ordered rules. `opencode.json` → `permissions` allows `subagent` on `*`; the frontmatter of `agentWIPPA.md` denies `edit` and `shell`; every definition under `categories/` guards `shell` on `rm -rf *` (deny, or `ask` for `orchestration-lead`) and denies `sudo *`, with `research-analyst` and `product-strategist` denying all shell, and `security-reviewer` additionally denying `git push --force *` and all edits. The top-level `policies` block, which hard-denies, is not set. | — | Add `"policies": [{ "action": "tool.use", "resource": "shell:rm -rf *", "effect": "deny" }]` to `opencode.json`. A plugin asserts the same through `ctx.permission.assert`. |
 | Audit logging of tool calls | Gap | Nothing records what a tool did. OpenCode keeps session transcripts, but the bundle has no queryable trail and no `ctx.event.subscribe` consumer. | Build | `tools/wippa-audit.ts` — see the Build list. |
 | Sandboxed execution for risky commands | Gap | `shell` runs with the host user's full filesystem, process and network authority. Permission denies narrow the blast radius but sandbox nothing. | Build | `tools/wippa-sandbox-run.ts` — see the Build list. |
 
@@ -95,7 +95,7 @@ Covered, working today with no new code and no new configuration:
 - Library documentation lookup — the `context7` MCP server, `opencode.json` → `mcp.servers.context7`.
 - Web search and URL fetching — the built-in `websearch` and `webfetch` tools.
 - Subagent search, get, list and cache refresh — `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list` and `wippa_subagent_invalid` in `tools/index.ts`, cached in `ctx.storage`.
-- Task delegation with result collection — the built-in `subagent` tool, with `opencode.json` → `experimental.subagent_depth` set to `2`.
+- Task delegation with result collection — the built-in `subagent` tool; `opencode.json` → `experimental.subagent_depth` is `1` in this repository, so a subagent cannot start another subagent, and an installed scope behaves the same because `install.sh --apply-config` writes no such key and OpenCode's default is also 1.
 - Issue tracker, GitHub — the same `github` server as the first entry.
 
 Partial, working through a general-purpose mechanism or with a caveat:
@@ -110,6 +110,8 @@ Partial, working through a general-purpose mechanism or with a caveat:
 
 ## Build list
 
+This is a wishlist for future work; nothing in it is implemented in the bundle today.
+
 Ordered by value. Each item is a TypeScript tool for this bundle, written against the OpenCode V2 plugin API and placed under `tools/`, following the convention of the plugin already there. A plugin registers tools through `ctx.tool.transform` with `options.namespace` and `options.codemode`, and the namespace and the tool name together form the effective name, so a file `tools/wippa-test-report.ts` holding a tool named `test_report` surfaces as `wippa_test_report`.
 
 | Rank | Capability | Proposed file | Plugin API surface | Tool contract |
@@ -121,6 +123,8 @@ Ordered by value. Each item is a TypeScript tool for this bundle, written agains
 | 5 | Sandboxed execution for risky commands | `tools/wippa-sandbox-run.ts` | `ctx.tool.transform`, `ctx.permission.assert` | `wippa_sandbox_run({ command, image?, timeoutMs? })` asserts permission for the action, then runs the command in a disposable container with networking disabled and a read-only source mount, returning the exit code and captured output. |
 
 ## Adopt list
+
+This is a wishlist for future work; nothing in it is implemented in the bundle today.
 
 Every gap whose answer is `Adopt MCP`. The block below is ready to paste into the `mcp.servers` object of `opencode.json`, alongside the three servers already there. Local servers take `type`, `command` and an optional `environment`; remote servers take `type`, `url` and optional `headers` and `oauth`. It holds the servers whose identifier comes from the vendor that owns the service, from the official MCP reference-server collection, or from the project's own git repository. Every third-party identifier that could not be checked offline is in the Unverified section below and is kept out of this block.
 
@@ -193,17 +197,19 @@ These identifiers could not be checked against a registry or a vendor document w
 
 ## How this bundle maps onto OpenCode
 
-One primary agent, ten subagents, three MCP servers, four tools and one skill.
+One primary agent, twelve subagents, three MCP servers, five tools and one skill.
 
-- The primary agent is `agentWIPPA.md` at the repository root. It plans, delegates, reviews, integrates and reports. Its frontmatter denies `edit` and `shell` and allows `subagent`, so it never writes code and never runs a command itself.
-- The ten subagents are self-contained definitions, each with `mode: subagent` and a deny on `rm -rf` and `sudo`:
+- The primary agent is `agentWIPPA.md` at the repository root. It plans, delegates, reviews, integrates and reports. Its frontmatter denies `edit` and `shell` and allows `subagent`, so it never writes code; the only command it triggers is the acceptance command through the bounded `wippa_verify` tool.
+- The twelve subagents are self-contained definitions, each with `mode: subagent` and shell guards on `rm -rf *` and `sudo *` (deny, or `ask` for `orchestration-lead`):
 
 | Subagent | Definition | Covers |
 |---|---|---|
 | `core-developer` | `categories/01-core-development/core-developer.md` | API design, authentication, backend, frontend, full-stack, GraphQL, microservices, UI design, webhooks, WebSockets, Electron, mobile apps |
 | `language-specialist` | `categories/02-language-specialists/language-specialist.md` | 27 language and framework specialists |
 | `infrastructure-engineer` | `categories/03-infrastructure/infrastructure-engineer.md` | Cloud, Azure, Terraform, Kubernetes, Docker, networking, platform engineering, SRE, deployment, incidents, Windows infrastructure, all PowerShell work |
-| `quality-auditor` | `categories/04-quality-security/quality-auditor.md` | Code review, architecture review, security audit, penetration testing, Active Directory, compliance, accessibility, QA, debugging, performance, chaos, test automation |
+| `quality-auditor` | `categories/04-quality-security/quality-auditor.md` | Code review, architecture review, test strategy, accessibility, interface testing, performance review |
+| `security-reviewer` | `categories/04-quality-security/security-reviewer.md` | Security audit, penetration testing, Active Directory posture, compliance and privacy, supply-chain audit, prose audit |
+| `debugger` | `categories/04-quality-security/debugger.md` | Bug reproduction, root-cause isolation, error analysis, test automation, flake control, resilience and chaos |
 | `data-engineer` | `categories/05-data-ai/data-engineer.md` | AI systems, data engineering and science, databases, Postgres, SQL, LLM architecture, prompts, NLP, ML engineering, MLOps, reinforcement learning |
 | `developer-experience` | `categories/06-developer-experience/developer-experience.md` | Build systems, CLIs, dependencies, documentation, git workflow, refactoring, MCP servers, READMEs, tooling, visual assets |
 | `domain-specialist` | `categories/07-specialized-domains/domain-specialist.md` | Blockchain, email deliverability, embedded, fintech, games, healthcare, IoT, Microsoft 365, payments, quant, risk, SEO, Slack, WordPress, X/Twitter |
@@ -212,15 +218,15 @@ One primary agent, ten subagents, three MCP servers, four tools and one skill.
 | `research-analyst` | `categories/10-research-analysis/research-analyst.md` | A/B tests, cohorts, competitors, market research, project validation, scientific literature, web search, trends, UX research |
 
 - The three MCP servers live in `opencode.json` → `mcp.servers`: `github` for issues, pull requests, review comments and CI status; `context7` for current library and framework documentation; `playwright` for browser automation in UI verification.
-- The four tools are an OpenCode plugin implemented in `tools/` and registered by `opencode.json` → `plugins`. It uses the namespace `wippa` with `codemode: false`, so the tools appear natively as `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list` and `wippa_subagent_invalid`. It indexes `categories/<category>/<agent>.md` when running in the repository and `<scope>/agents/<agent>.md` when running from an installed copy, and `wippa_subagent_list` groups the result by the category directory.
+- The five tools are an OpenCode plugin implemented in `tools/` and registered by `opencode.json` → `plugins`. It uses the namespace `wippa` with `codemode: false`, so the tools appear natively as `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list`, `wippa_subagent_invalid` and `wippa_verify`, which runs the acceptance command through a shell with a timeout and capped output. It indexes `categories/<category>/<agent>.md` when running in the repository and `<scope>/agents/<agent>.md` when running from an installed copy, and `wippa_subagent_list` groups the result by the category directory.
 - The skill at `skills/wippa-subagent-search/SKILL.md` documents the same four operations and gives the equivalent `read`, `glob` and `grep` procedure for when the plugin is not loaded.
 - The installer `install.sh` flattens `categories/*/*.md` plus `agentWIPPA.md` into `<scope>/agents/`, copies the skill and the tools plugin, and with `--apply-config` merges the config keys into the target `opencode.json` without overwriting values that are already set.
 
 ## Deployment notes
 
 - `opencode.json` is the project configuration OpenCode reads. Project configuration can live at `opencode.json` or `.opencode/opencode.json` in the project directory; the global file is `~/.config/opencode/opencode.json`.
-- `cli.json` holds terminal and TUI preferences and is global-only in V2, at `~/.config/opencode/cli.json`. The copy at the bundle root is not read by OpenCode.
-- `service.json` is not an OpenCode file and nothing in the bundle references it. It holds only the environment placeholder `{env:WIPPA_SERVICE_PASSWORD}`.
+- `cli.json` holds terminal and TUI preferences and is global-only in V2, at `~/.config/opencode/cli.json`; it is machine-local and is not shipped in this bundle.
+- `service.json` is not an OpenCode file and nothing in the bundle references it; no copy is shipped, and the name is listed in `.gitignore` only as a machine-local file to ignore.
 - No configuration key accepts a list of agent file paths, so the agent definitions have to sit in a discovered directory. The installer flattens them into `<scope>/agents/`, where `<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install.
-- `env.example` documents the variables the bundle reads: `GITHUB_PERSONAL_ACCESS_TOKEN` for the `github` MCP server, `WIPPA_AGENT_REGISTRY` for the `orchestration-lead` agent, and `WIPPA_AGENT_DIR`, which overrides the directories the tools plugin indexes.
-- `opencode.json` → `permissions` allows the `subagent` action on `*`, `opencode.json` → `agents` disables the `general` and `explore` built-ins and demotes the `build` built-in to a subagent, and `opencode.json` → `experimental.subagent_depth` is `2`.
+- `env.example` documents the variables the bundle reads: `GITHUB_PERSONAL_ACCESS_TOKEN` for the `github` MCP server, `WIPPA_AGENT_REGISTRY` for the `orchestration-lead` agent, and `WIPPA_AGENT_DIR`, which overrides the directories the tools plugin indexes, and `WIPPA_CUSTOM_AGENT_IDS`, which exempts the listed agent ids (comma-separated) from roster drift reporting.
+- `opencode.json` → `permissions` allows the `subagent` action on `*`, `opencode.json` → `agents` disables the `general` and `explore` built-ins and demotes the `build` built-in to a subagent, and `opencode.json` → `experimental.subagent_depth` is `1`. That key is checkout-only: `install.sh --apply-config` does not write it, and OpenCode's default is also 1, so an installed scope behaves the same.

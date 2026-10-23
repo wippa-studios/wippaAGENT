@@ -1,5 +1,13 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { test } from "node:test"
@@ -401,18 +409,43 @@ test("describeDrift reports a roster entry with no file", () => {
   )
 })
 
-test("describeDrift does not report the global custom agents as missing files", () => {
+test("describeDrift does not report the configured custom agents as missing files", () => {
   const catalog = bundleCatalog()
   const roster: RosterCategory[] = [
     { name: "Custom Agents", count: 3, agents: [...GLOBAL_CUSTOM_AGENTS] },
   ]
 
-  const drift = describeDrift(catalog, roster)
-  for (const id of GLOBAL_CUSTOM_AGENTS) {
-    assert.ok(
-      !drift.some((line) => line.includes(id)),
-      `${id} is a global custom agent and is not drift`,
-    )
+  const previous = process.env.WIPPA_CUSTOM_AGENT_IDS
+  process.env.WIPPA_CUSTOM_AGENT_IDS = GLOBAL_CUSTOM_AGENTS.join(",")
+  try {
+    const drift = describeDrift(catalog, roster)
+    for (const id of GLOBAL_CUSTOM_AGENTS) {
+      assert.ok(
+        !drift.some((line) => line.includes(id)),
+        `${id} is a configured custom agent and is not drift`,
+      )
+    }
+  } finally {
+    if (previous === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previous
+  }
+})
+
+test("WIPPA_CUSTOM_AGENT_IDS suppresses the drift of exactly the listed ids", () => {
+  const previous = process.env.WIPPA_CUSTOM_AGENT_IDS
+  process.env.WIPPA_CUSTOM_AGENT_IDS = "custom-a, custom-b"
+  try {
+    const roster: RosterCategory[] = [
+      { name: "Custom", count: 3, agents: ["custom-a", "custom-b", "still-drift"] },
+    ]
+    const drift = describeDrift(buildCatalog([tempDir()]), roster)
+
+    assert.ok(!drift.some((line) => line.includes("custom-a")))
+    assert.ok(!drift.some((line) => line.includes("custom-b")))
+    assert.ok(drift.some((line) => line.includes("still-drift")), "an id outside the env list is drift")
+  } finally {
+    if (previous === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previous
   }
 })
 
@@ -438,6 +471,41 @@ test("describeDrift reports subagents disabled in opencode.json", () => {
     ),
     "an indexed subagent that is disabled in the config is drift",
   )
+})
+
+test("describeDrift unions the disabled agents of every candidate config", () => {
+  const first = tempDir()
+  const second = tempDir()
+  const firstAgents = join(first, "agents")
+  const secondAgents = join(second, "agents")
+  mkdirSync(firstAgents, { recursive: true })
+  mkdirSync(secondAgents, { recursive: true })
+
+  writeFileSync(
+    join(firstAgents, "disabled-a.md"),
+    "---\ndescription: probe a\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(secondAgents, "disabled-b.md"),
+    "---\ndescription: probe b\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(first, "opencode.json"),
+    JSON.stringify({ agents: { "disabled-a": { disabled: true } } }, null, 2),
+  )
+  writeFileSync(
+    join(second, "opencode.json"),
+    JSON.stringify({ agents: { "disabled-b": { disabled: true } } }, null, 2),
+  )
+
+  const drift = describeDrift(buildCatalog([firstAgents, secondAgents]), [])
+
+  for (const id of ["disabled-a", "disabled-b"]) {
+    assert.ok(
+      drift.some((line) => line.includes("disabled in opencode.json") && line.includes(id)),
+      `${id} is disabled in one of the candidate configs`,
+    )
+  }
 })
 
 test("describeDrift reports no disabled agent for the real bundle", () => {
@@ -514,7 +582,8 @@ test("invalid reports the refresh, the counts and the drift", () => {
   const roster = readRoster([CATEGORIES_DIR])
   const output = invalid(catalog, roster)
 
-  assert.match(output, /cached catalog was dropped and rebuilt from disk/)
+  assert.match(output, /The cached catalog was dropped and rebuilt from disk\./)
+  assert.ok(!output.includes("Cache cleared"), "the refresh line states the fact without the overclaim")
   assert.match(output, new RegExp(`Agents indexed: ${catalog.agents.length}`))
   assert.match(output, /Drift against the roster/)
 })
@@ -540,4 +609,231 @@ test("verify captures the output of the acceptance command", () => {
   assert.equal(result.exitCode, 0)
   assert.equal(result.ok, true)
   assert.ok(result.stderr.includes("wippa-verify-stderr-out"))
+})
+
+test("verify reports a timeout instead of waiting for the command", () => {
+  const started = Date.now()
+  const result = verify({ command: "sleep 5", timeoutMs: 1_000 })
+  const elapsed = Date.now() - started
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "timeout")
+  assert.equal(result.exitCode, -1)
+  assert.ok(elapsed < 4_000, `the run was killed rather than waited out (${elapsed}ms)`)
+  assert.equal(result.cwd, process.cwd())
+})
+
+test("verify truncates a large stream keeping the head and the tail", () => {
+  const result = verify({ command: "seq 1 20000", outputLimit: 4_096 })
+
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.ok, true)
+  assert.ok(result.stdout.length < 6_000, "the stream is capped")
+  assert.match(result.stdout, /\[truncated: kept first 2048 and last 2048 of \d+ characters\]/)
+  assert.ok(result.stdout.startsWith("1\n2\n"), "the head of the output is kept")
+  assert.ok(result.stdout.trimEnd().endsWith("20000"), "the tail of the output is kept")
+})
+
+test("verify truncates stderr too", () => {
+  const result = verify({ command: "seq 1 20000 >&2", outputLimit: 4_096 })
+
+  assert.equal(result.exitCode, 0)
+  assert.ok(result.stderr.includes("[truncated: kept first 2048 and last 2048 of"))
+  assert.ok(result.stderr.length < 6_000)
+})
+
+test("verify reports an output limit when maxBuffer is exceeded", () => {
+  const result = verify({ command: "seq 1 100000", maxBuffer: 1_024 })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "output-limit")
+
+  const truncated = verify({ command: "seq 1 100000", maxBuffer: 1_024, outputLimit: 256 })
+  assert.ok(truncated.stdout.includes("[truncated: kept first 128 and last 128 of"))
+})
+
+test("verify reports a working directory that does not exist", () => {
+  const missing = join(tempDir(), "does-not-exist")
+  const result = verify({ command: "echo hi", cwd: missing })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "cwd-not-found")
+  assert.equal(result.stdout, "")
+  assert.ok(result.stderr.includes(missing))
+  assert.equal(result.cwd, missing)
+})
+
+test("verify runs in the requested directory and records it as absolute", () => {
+  const dir = tempDir()
+  writeFileSync(join(dir, "marker.txt"), "wippa-cwd-marker\n")
+
+  const result = verify("cat marker.txt", dir)
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.ok, true)
+  assert.ok(result.stdout.includes("wippa-cwd-marker"))
+  assert.equal(result.cwd, dir)
+
+  const relative = verify("pwd", ".")
+  assert.equal(relative.cwd, process.cwd())
+})
+
+test("parseRoster does not read an unrecognised table header as an agent id", () => {
+  const markdown = [
+    "## Your roster",
+    "",
+    "### Probe",
+    "",
+    "| probe-header | probe-category |",
+    "| --- | --- |",
+    "| `real-agent` | Probe |",
+    "",
+  ].join("\n")
+
+  const roster = parseRoster(markdown)
+  const ids = roster.flatMap((category) => category.agents)
+
+  assert.deepEqual(ids, ["real-agent"])
+  assert.ok(!ids.includes("probe-header"), "the header row is not a phantom agent id")
+})
+
+test("parseRoster still reads a table whose data follows a separator without a header", () => {
+  const markdown = [
+    "## Your roster",
+    "",
+    "### Probe",
+    "",
+    "| --- | --- |",
+    "| `only-agent` | Probe |",
+    "",
+  ].join("\n")
+
+  const roster = parseRoster(markdown)
+  assert.deepEqual(
+    roster.flatMap((category) => category.agents),
+    ["only-agent"],
+  )
+})
+
+test("parseFrontmatter reads a folded block scalar", () => {
+  const text = [
+    "---",
+    "description: >",
+    "  First line of the description",
+    "  continues on the second line.",
+    "mode: subagent",
+    "---",
+    "",
+    "body",
+  ].join("\n")
+
+  const { data, body } = parseFrontmatter(text)
+  assert.equal(data.description, "First line of the description continues on the second line.")
+  assert.equal(data.mode, "subagent")
+  assert.equal(body, "body")
+})
+
+test("parseFrontmatter reads a literal block scalar", () => {
+  const text = ["---", "description: |", "  first", "  second", "---", "", "body"].join("\n")
+
+  const { data } = parseFrontmatter(text)
+  assert.equal(data.description, "first\nsecond")
+})
+
+test("parseFrontmatter tolerates a blank line before the opening fence", () => {
+  const text = "\n---\ndescription: probe\nmode: subagent\n---\n\nbody\n"
+
+  const { data, body } = parseFrontmatter(text)
+  assert.equal(data.description, "probe")
+  assert.equal(data.mode, "subagent")
+  assert.equal(body, "body\n")
+})
+
+test("fingerprint detects a same-size content edit at the same mtime", () => {
+  const dir = tempDir()
+  const path = join(dir, "sample.md")
+  const before = "---\ndescription: alpha\n---\n\nbody\n"
+  const after = "---\ndescription: bravo\n---\n\nbody\n"
+  assert.equal(before.length, after.length, "the two versions have the same size")
+
+  const fixedMtime = new Date(Date.now() - 120_000)
+  writeFileSync(path, before)
+  utimesSync(path, fixedMtime, fixedMtime)
+  const first = fingerprint(buildCatalog([dir]))
+
+  writeFileSync(path, after)
+  utimesSync(path, fixedMtime, fixedMtime)
+  const second = fingerprint(buildCatalog([dir]))
+
+  assert.equal(statSync(path).mtimeMs, fixedMtime.getTime(), "the mtime is really the same")
+  assert.equal(statSync(path).size, before.length, "the size is really the same")
+  assert.notEqual(first, second, "the content digest catches the edit")
+})
+
+test("scanFingerprint mirrors the digest and detects a same-size content edit", () => {
+  const dir = tempDir()
+  const path = join(dir, "sample.md")
+  const before = "---\ndescription: alpha\n---\n\nbody\n"
+  const after = "---\ndescription: bravo\n---\n\nbody\n"
+
+  const fixedMtime = new Date(Date.now() - 120_000)
+  writeFileSync(path, before)
+  utimesSync(path, fixedMtime, fixedMtime)
+  const first = scanFingerprint([dir])
+  assert.equal(first, fingerprint(buildCatalog([dir])), "the scan matches a fresh build")
+
+  writeFileSync(path, after)
+  utimesSync(path, fixedMtime, fixedMtime)
+  const second = scanFingerprint([dir])
+
+  assert.notEqual(first, second, "the scan reads the content and sees the edit")
+  assert.equal(second, fingerprint(buildCatalog([dir])), "the scan still matches a fresh build")
+})
+
+test("a project agents file overrides the bundle for the same id", () => {
+  const root = tempDir()
+  const agents = join(root, "agents")
+  mkdirSync(agents, { recursive: true })
+  writeFileSync(
+    join(agents, "core-developer.md"),
+    "---\ndescription: project override probe\nmode: subagent\n---\n\nbody\n",
+  )
+
+  const dirs = resolveAgentDirs(root)
+  assert.ok(
+    dirs.indexOf(agents) < dirs.indexOf(CATEGORIES_DIR),
+    "the project directory is searched before the bundle",
+  )
+
+  const catalog = buildCatalog(dirs)
+  const agent = catalog.agents.find((entry) => entry.id === "core-developer")
+  assert.ok(agent)
+  assert.ok(agent.path.startsWith(agents), `the project file wins (${agent.path})`)
+  assert.equal(agent.description, "project override probe")
+})
+
+test("resolveAgentDirs honours OPENCODE_CONFIG_DIR for the global directory", () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousHome = process.env.HOME
+  const home = tempDir()
+  const configDir = join(home, "opencode-config")
+  const globalAgents = join(configDir, "agents")
+  mkdirSync(globalAgents, { recursive: true })
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  process.env.HOME = home
+  try {
+    const dirs = resolveAgentDirs(tempDir())
+    assert.ok(dirs.includes(globalAgents), "the override directory is indexed")
+    assert.ok(
+      !dirs.includes(join(home, ".config", "opencode", "agents")),
+      "the default location is not indexed when the override is set",
+    )
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  }
 })

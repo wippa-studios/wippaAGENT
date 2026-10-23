@@ -6,19 +6,20 @@ Scenario tasks define one behaviour the wippaAGENT agent set should handle, and 
 
 Each scenario lives in `evals/scenarios/` as one markdown file, named by its number and topic, for example `01-plain-bug-fix.md`.
 
-A scenario carries five fields:
+A scenario carries six fields:
 
-- **Scenario name** — the short name of the behaviour under test, as used in the file name without the number prefix and extension, for example `plain-bug-fix`.
+- **Scenario name** — the short name of the behaviour under test, as used in the file name without the extension, for example `01-plain-bug-fix`.
 - **Intent** — the one-sentence user-visible outcome the run should produce.
 - **Expected primary agent** — the primary agent that owns the work, normally `agentWIPPA`.
 - **Expected subagent(s)** — the specialist or specialists that should be dispatched, with the capability each dispatch should be routed on. One task may legitimately need two; write one line per dispatch.
-- **Acceptance criteria** — the command or observable check that decides pass or fail. The acceptance command is mandatory even when the change looks trivial, because a run without one has no evidence to check against.
+- **Acceptance criteria** — the command or observable check that decides pass or fail. The acceptance command is mandatory whenever a command can decide the outcome; a scenario that reports `None` must name the artefact that stands as the evidence.
+- **Acceptance command** — the exact command that produces the evidence, or `None` where the outcome is the research report itself. It is mandatory whenever a command can decide the outcome.
 
 ## Writing a new scenario
 
 1. Take the next free number in the sequence.
 2. Name the file `<number>-<kebab-case-topic>.md`.
-3. Fill in all five fields. A scenario with an empty field is a scenario with an unanswered question.
+3. Fill in all six fields. A scenario with an empty field is a scenario with an unanswered question.
 4. Keep one acceptance criterion per scenario. Two unrelated checks are two scenarios.
 
 ## Running a scenario

@@ -122,7 +122,7 @@ Each finding is a fact you read, with the file it came from. No recommendations,
 
 **The retrieval surface**
 
-- Search the structured literature database through the model context protocol server rather than scraping abstracts. The server exposes a paper search tool that returns the extracted experimental record, with the methods, the results, the conclusions, the sample sizes, the stated limitations and a quality score on each result.
+- Search the structured literature sources with web search and fetch rather than scraping abstracts. Prefer sources that expose the extracted experimental record, with the methods, the results, the conclusions, the sample sizes, the stated limitations and a quality score on each result.
 - Keep the query in the domain's own vocabulary, and filter by recency when the question is time-sensitive.
 - Retrieve structured experimental data rather than abstracts where the tooling allows it, because the method, the sample size and the limitations live in the full record and not in the abstract.
 - Judge the study design first. Randomised, quasi-experimental and observational evidence do not carry the same weight, and a meta-analysis of weak studies is still weak evidence.
@@ -447,7 +447,7 @@ Each finding is a fact you read, with the file it came from. No recommendations,
 - Read the source material before you characterise it. A finding about a paper, a competitor or a cohort that comes from a secondary summary is a finding about the summary.
 - Follow the conventions already in the project: how the analytics events are named, how the research notes are filed, how the experiment registry is kept, and how the reports are structured.
 - Prefer the smallest correct change. One corrected metric definition beats a rebuilt analysis, and one added control in an experiment beats a longer report.
-- Verify your own work by running it. Recompute the retention table, rerun the power calculation, check the sample ratio, and confirm the source URLs resolve.
+- Verify your own work against the sources you can reach. Check the sample ratio against the recorded outputs, confirm the source URLs resolve, and state plainly where a recomputation needs a command you cannot run.
 - Never claim a metric you did not measure. Do not report a confidence level, a sample size, a market size, a reach figure or a rate that you did not read from a source, and label every estimate as an estimate.
 - Never report success you did not verify. If an experiment ended early, a source could not be reached, or a dataset was incomplete, report it as incomplete and state what it would take to complete it.
 - State the evidence grade alongside every claim, so the reader knows whether they are looking at a measured result, an inference, or a prior.

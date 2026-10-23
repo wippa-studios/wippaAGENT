@@ -16,6 +16,12 @@ export interface AgentEntry {
   mtimeMs: number
   size: number
   /**
+   * sha256 of the file content at build time. mtime and size can both stay the
+   * same across an edit — a same-length rewrite restores neither guarantee —
+   * so the digest is what makes the fingerprint follow the bytes.
+   */
+  digest: string
+  /**
    * The category the agent belongs to. For a file nested in a category
    * directory this is the directory name, for example `01-core-development`.
    * For an installed flat file it is the category the roster gives the agent.
@@ -48,13 +54,25 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 // Directories that never hold agent definitions.
 const SKIPPED_WALK_DIRS = new Set(["node_modules", ".git", "docs", "skills"])
 // Custom agents the user keeps in their own global configuration. They have no
-// file in this bundle and are legitimately global, so they are not drift.
-const GLOBAL_CUSTOM_AGENT_IDS = new Set(["claim-skeptic", "ml-experimenter", "github"])
+// file in this bundle and are legitimately global, so they are not drift. The
+// ids come from the environment rather than the source, so a user is not stuck
+// with the ones this repository happened to ship with, and it is read per call
+// so a test or a session can change the set without reloading the module.
+function customAgentIds(): Set<string> {
+  return new Set(
+    (process.env.WIPPA_CUSTOM_AGENT_IDS ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
+  )
+}
 
 // A directory is global when it is the user-level OpenCode agent directory.
 // Everything else — the bundle, the project checkout, an explicit override — is project scope.
+// OPENCODE_CONFIG_DIR is the override install.sh writes to, so the catalog
+// indexes the same scope the installer used.
 function globalAgentsDir(): string {
-  return join(homedir(), ".config", "opencode", "agents")
+  return join(process.env.OPENCODE_CONFIG_DIR ?? join(homedir(), ".config", "opencode"), "agents")
 }
 
 function realPath(path: string): string {
@@ -151,9 +169,10 @@ export function categorySlug(name: string): string {
 }
 
 /**
- * Candidate agent directories in priority order. Every directory that exists
- * is kept, project directories before global ones, so an agent id from a
- * project directory wins over the same id from a global one.
+ * Candidate agent directories in priority order: an explicit override first,
+ * then the project directories, then the shipped bundle, then the global
+ * directory. Every directory that exists is kept, so an agent id from a
+ * project directory wins over the bundle copy and over a global one.
  */
 export function resolveAgentDirs(cwd: string = process.cwd()): string[] {
   const candidates: string[] = []
@@ -166,11 +185,13 @@ export function resolveAgentDirs(cwd: string = process.cwd()): string[] {
     }
   }
 
-  // The repository tree is `categories/<category>/<agent>.md`. An installed
-  // scope keeps the agents flat in `<cwd>/agents/` or `<cwd>/.opencode/agents/`.
-  candidates.push(resolve(BUNDLE_CATEGORIES_DIR))
+  // The project directories come before the bundle, so an agent a project
+  // overrides wins over the copy this repository ships. An installed scope
+  // keeps the agents flat in `<cwd>/agents/` or `<cwd>/.opencode/agents/`; the
+  // repository tree is `categories/<category>/<agent>.md`.
   candidates.push(resolve(join(cwd, "agents")))
   candidates.push(resolve(join(cwd, ".opencode", "agents")))
+  candidates.push(resolve(BUNDLE_CATEGORIES_DIR))
   candidates.push(resolve(globalAgentsDir()))
 
   const seen = new Set<string>()
@@ -190,18 +211,24 @@ function scopeFor(dir: string): AgentScope {
 }
 
 /**
- * Minimal frontmatter reader for the `---` block. The agent files only use flat
- * `key: value` pairs at the top level, so nested block content is skipped.
+ * Minimal frontmatter reader for the `---` block. Flat `key: value` pairs, plus
+ * the `>` and `|` block scalars an agent description is written with, because a
+ * folded description still has to become the one-line text the catalog stores.
+ * Nested block content of any other shape is skipped.
  */
 export function parseFrontmatter(text: string): { data: Record<string, string>; body: string } {
   const data: Record<string, string> = {}
   const normalized = text.replace(/\r\n/g, "\n")
   const lines = normalized.split("\n")
 
-  if (lines[0]?.trim() !== "---") return { data, body: normalized }
+  // A blank line before the opening fence is tolerated: the fence is the first
+  // non-blank line, not necessarily the first line.
+  let start = 0
+  while (start < lines.length && lines[start].trim() === "") start++
+  if (lines[start]?.trim() !== "---") return { data, body: normalized }
 
   let end = -1
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = start + 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") {
       end = i
       break
@@ -209,11 +236,35 @@ export function parseFrontmatter(text: string): { data: Record<string, string>; 
   }
   if (end === -1) return { data, body: normalized }
 
-  for (const line of lines.slice(1, end)) {
+  for (let i = start + 1; i < end; i++) {
+    const line = lines[i]
     if (/^\s/.test(line)) continue
     const match = /^([A-Za-z0-9_.-]+):\s*(.*)$/.exec(line)
     if (!match) continue
-    data[match[1]] = stripQuotes(match[2].trim())
+    const value = match[2].trim()
+
+    // A block scalar: `>` folds the indented lines into one space-separated
+    // line, `|` keeps their line breaks. An optional chomping indicator is
+    // tolerated and ignored.
+    const block = /^([>|])[+-]?$/.exec(value)
+    if (block) {
+      const collected: string[] = []
+      let j = i + 1
+      for (; j < end; j++) {
+        const next = lines[j]
+        if (next.trim() !== "" && !/^\s/.test(next)) break
+        collected.push(next.replace(/^\s+/, ""))
+      }
+      while (collected.length > 0 && collected[collected.length - 1].trim() === "") collected.pop()
+      data[match[1]] =
+        block[1] === "|"
+          ? collected.join("\n").trim()
+          : collected.join(" ").replace(/\s+/g, " ").trim()
+      i = j - 1
+      continue
+    }
+
+    data[match[1]] = stripQuotes(value)
   }
 
   return { data, body: lines.slice(end + 1).join("\n").replace(/^\n+/, "") }
@@ -260,33 +311,49 @@ export function parseRoster(source: string): RosterCategory[] {
 
   let current: RosterCategory | undefined
   let columns: TableColumns | undefined
+  // A table row is only data once its table is known: either the header row was
+  // recognised by `detectTableColumns`, or a separator row has already been
+  // seen. Without this an unrecognised header such as `| probe-a | probe-b |`
+  // parses as a data row and the roster grows a phantom agent id.
+  let sawSeparator = false
 
   for (const line of section) {
     const heading = /^###\s+(.+?)\s*\((\d+)\)\s*$/.exec(line)
     if (heading) {
       current = group(heading[1], Number(heading[2]))
       columns = undefined
+      sawSeparator = false
       continue
     }
     if (/^###\s/.test(line)) {
       current = group(line.replace(/^###\s+/, "").trim())
       columns = undefined
+      sawSeparator = false
       continue
     }
     if (/^#{1,2}\s/.test(line)) break
     // The roster closes with a blockquote note; it is not part of the roster.
-    if (line.trimStart().startsWith(">")) continue
+    if (line.trimStart().startsWith(">")) {
+      sawSeparator = false
+      continue
+    }
 
     if (line.trimStart().startsWith("|")) {
       const cells = splitTableRow(line)
       if (cells.length === 0) continue
-      if (isTableSeparator(cells)) continue
+      if (isTableSeparator(cells)) {
+        sawSeparator = true
+        continue
+      }
       if (!columns) {
         const detected = detectTableColumns(cells)
         if (detected) {
           columns = detected
           continue
         }
+        // An unrecognised first row before any separator is a header we do not
+        // understand, so it is skipped rather than read as an agent id.
+        if (!sawSeparator) continue
       }
       const layout = columns ?? { idColumn: 0, categoryColumn: 1 }
       const id = cellAgentId(cells[layout.idColumn] ?? "")
@@ -296,6 +363,7 @@ export function parseRoster(source: string): RosterCategory[] {
       continue
     }
 
+    sawSeparator = false
     if (!current) continue
     for (const match of line.matchAll(/`([^`]+)`/g)) {
       const id = match[1].trim()
@@ -422,6 +490,7 @@ export function buildCatalog(dirs: string[], roster: RosterCategory[] = readRost
         scope,
         mtimeMs: stats.mtimeMs,
         size: stats.size,
+        digest: digestOf(text),
       }
 
       // A nested file carries the name of its category directory; a flat
@@ -446,8 +515,12 @@ export function buildCatalog(dirs: string[], roster: RosterCategory[] = readRost
   return { agents, dirs: [...dirs] }
 }
 
-function triple(path: string, mtimeMs: number, size: number): string {
-  return `${path}\u0000${mtimeMs}\u0000${size}`
+function digestOf(text: string): string {
+  return createHash("sha256").update(text).digest("hex")
+}
+
+function triple(path: string, mtimeMs: number, size: number, digest: string): string {
+  return `${path}\u0000${mtimeMs}\u0000${size}\u0000${digest}`
 }
 
 function hashTriples(triples: string[]): string {
@@ -455,16 +528,24 @@ function hashTriples(triples: string[]): string {
   return createHash("sha256").update(sorted.join("\n")).digest("hex")
 }
 
-/** Stable hash over the sorted (path, mtimeMs, size) triples of a catalog. */
+/**
+ * Stable hash over the sorted (path, mtimeMs, size, digest) triples of a
+ * catalog. mtime and size stay in the triple so a bare `touch` still
+ * invalidates, and the content digest catches an edit that leaves both the
+ * same.
+ */
 export function fingerprint(catalog: Catalog): string {
-  return hashTriples(catalog.agents.map((agent) => triple(agent.path, agent.mtimeMs, agent.size)))
+  return hashTriples(
+    catalog.agents.map((agent) => triple(agent.path, agent.mtimeMs, agent.size, agent.digest)),
+  )
 }
 
 /**
  * Fingerprint of the current tree without parsing any frontmatter. It mirrors
  * the selection rules of `buildCatalog` — the same agent id resolves to the
- * same file — so it matches `fingerprint` for the same directories and can be
- * used as a cheap cache check.
+ * same file — and reads each file to hash its content, so it matches
+ * `fingerprint` for the same directories and can be used as a cheaper cache
+ * check than a full build.
  */
 export function scanFingerprint(dirs: string[]): string {
   const byId = new Map<string, { scope: AgentScope; value: string }>()
@@ -476,7 +557,8 @@ export function scanFingerprint(dirs: string[]): string {
       if (!stats) continue
 
       const id = basename(file.path, ".md")
-      const value = triple(file.path, stats.mtimeMs, stats.size)
+      const content = readSafe(file.path) ?? ""
+      const value = triple(file.path, stats.mtimeMs, stats.size, digestOf(content))
       const existing = byId.get(id)
       if (!existing) {
         byId.set(id, { scope, value })
@@ -489,6 +571,16 @@ export function scanFingerprint(dirs: string[]): string {
   }
 
   return hashTriples([...byId.values()].map((entry) => entry.value))
+}
+
+/**
+ * Fingerprint of the roster file, so an edit to the roster invalidates a
+ * cached catalog whose category fields were derived from it. An absent roster
+ * hashes the empty string, which is a real value and not a sentinel.
+ */
+export function rosterFingerprint(dirs: string[]): string {
+  const path = findRosterFile(dirs)
+  return digestOf(path ? (readSafe(path) ?? "") : "")
 }
 
 /** True when a file for the agent id exists in a known location. */
@@ -519,11 +611,12 @@ export function describeDrift(catalog: Catalog, roster: RosterCategory[]): strin
     }
   }
 
+  const custom = customAgentIds()
   for (const category of roster) {
     for (const id of category.agents) {
       if (onDisk.has(id)) continue
       // Custom global agents live in the user's own configuration.
-      if (GLOBAL_CUSTOM_AGENT_IDS.has(id)) continue
+      if (custom.has(id)) continue
       if (agentFileExists(catalog, id)) continue
       lines.push(`In the roster (${category.name}) but no file on disk: ${id}`)
     }
@@ -548,7 +641,10 @@ function configCandidates(catalog: Catalog): string[] {
   const candidates: string[] = []
   for (const dir of catalog.dirs) candidates.push(join(dirname(dir), "opencode.json"))
   candidates.push(join(process.cwd(), "opencode.json"))
-  return candidates
+  // A project scope can put a config beside the agents directory and in
+  // `.opencode/`, and `cwd` can be one of the directories already seen, so the
+  // same file must be read once.
+  return [...new Set(candidates)]
 }
 
 function disabledAgents(catalog: Catalog): Set<string> {
@@ -562,10 +658,12 @@ function disabledAgents(catalog: Catalog): Set<string> {
     } catch {
       continue
     }
+    // Every candidate config is read, not just the first: a project scope can
+    // disable agents in `.opencode/opencode.json` while another candidate sits
+    // beside the agents directory, and the disabled set is the union.
     for (const [id, config] of Object.entries(parsed.agents ?? {})) {
       if (config && typeof config === "object" && config.disabled === true) disabled.add(id)
     }
-    break
   }
   return disabled
 }

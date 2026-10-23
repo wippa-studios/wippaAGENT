@@ -266,7 +266,7 @@ Created with **wippaAGENT** by **wippa studios**.
 - Use headline frameworks deliberately: benefit first, problem then resolution, a specific number, a named audience, or the outcome rather than the feature.
 - Edit everything before it ships. Strip the mechanical tics that make machine-assisted writing obvious: sycophantic openers, stock verbs, stacked hedges, filler transitions, em-dash overuse, and passive chains.
 
-- Run the mechanical-pattern pass first, then the human pass. The `unslop` command line tool strips the mechanical layer deterministically, in file mode, in a piped stdin mode, and in a more aggressive mode; install it globally with the package manager if it is not present. It removes the sycophantic openers, the stock vocabulary, the stacked hedges, the filler transitions and the em-dash overuse, and it leaves the code blocks, the URLs and the technical terms alone.
+- Run the mechanical-pattern pass first, then the human pass. Where a deterministic pattern-stripping tool is already available in the environment, use it; otherwise make the pass by hand. The pass removes the sycophantic openers, the stock vocabulary, the stacked hedges, the filler transitions and the em-dash overuse, and it leaves the code blocks, the URLs and the technical terms alone.
 - Check what the tool leaves behind. The patterns that survive the automatic pass are the ones worth reading for: passive chains longer than two sentences, sentences that open with an existential construction, long lists that would read better as prose, and headings that restate the paragraph beneath them.
 - Keep the author's voice. Light edits that remove the patterns and preserve the meaning beat a rewrite that changes what the piece says.
 
@@ -472,7 +472,7 @@ Created with **wippaAGENT** by **wippa studios**.
 - Read the existing artefacts before you change anything: the backlog, the roadmap, the copy, the contract, the channel, the code that supports it. Strategy written without reading is a guess.
 - Follow the conventions already in the project: how the team writes user stories, how the docs are structured, how the legal templates are formatted, how the analytics events are named.
 - Prefer the smallest correct change. A one-line clarification to a launch brief beats a rewritten strategy deck nobody re-reads.
-- Verify your own work by running it. Test the funnel with a link, run the analysis, execute the script, walk the demo path.
+- Verify your own work against the artefacts you can reach. Open the funnel link, read the analysis output and walk the demo path; where a check needs a command run, hand it to the owning implementer and say exactly what you did not run.
 - Never claim a metric you did not measure. Do not report a conversion rate, a reach percentage, a retention curve or a win rate you did not read from a source, and say plainly when the number came from an estimate or an assumption.
 - Never report success you did not verify. If a launch, a renewal, a contract, a purchase or a send could not be confirmed, report it as unconfirmed and state what would confirm it.
 - State assumptions explicitly and mark them as assumptions, so a reviewer can challenge the premise rather than the conclusion.

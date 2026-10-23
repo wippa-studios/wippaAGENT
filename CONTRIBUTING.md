@@ -13,7 +13,7 @@ Four kinds of change are welcome.
 
 1. Pick the category. The subagent belongs in the `categories/NN-slug/` directory that owns the work, using the same numeric prefix and slug style as the existing ones.
 2. Add one file. The file name is the agent id, so `categories/04-quality-security/quality-auditor.md` gives the id `quality-auditor`. The installer flattens the category directory, which means the id is the file name and nothing else.
-3. Use the required frontmatter shape:
+3. Use the shape every definition starts from — the agent's remit decides whether the rules go further:
 
    ```yaml
    ---
@@ -23,6 +23,9 @@ Four kinds of change are welcome.
    permissions:
      - action: shell
        resource: "rm -rf *"
+       effect: deny
+     - action: shell
+       resource: "sudo *"
        effect: deny
    ---
    ```

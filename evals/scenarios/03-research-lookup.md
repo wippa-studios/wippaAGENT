@@ -22,4 +22,4 @@ research-analyst
 
 ## Acceptance command
 
-- None. The outcome is the research report itself.
+- None. The outcome is the research report itself; the acceptance criteria above are the check.
