@@ -16,6 +16,7 @@ Install once, point the config at the orchestrator, and every project gets the s
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
 ![Tools](https://img.shields.io/badge/tools-5-f59e0b?style=for-the-badge)
+[![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 
 [**Quick Start**](#-quick-start) &nbsp;·&nbsp;
 [**Architecture**](#-architecture) &nbsp;·&nbsp;
@@ -87,33 +88,63 @@ That's it. Every project you open now has the full roster.
 ## 🏗 Architecture
 
 ```mermaid
+%% The ~~~ links at the end are layout-only and carry no meaning: they keep the roster
+%% in two rows and the server row below it. Roster cards list the agent ids in a category.
 flowchart TB
-    U([You]) --> O
+    U([You]) --> O["<b>agentWIPPA</b><br/>plans · delegates · verifies<br/><i>no edit · no shell</i>"]
 
-    subgraph ORCH [" Primary agent "]
-        O["<b>agentWIPPA</b><br/>plan · delegate · verify<br/><i>no edit · no shell</i>"]
+    L[".opencode/PLAN.md<br/>plan ledger"]
+    V{{"wippa_verify<br/>exit code = verdict"}}
+    O --> L
+    O --> V
+
+    subgraph ROSTER["Twelve subagents · ten categories"]
+        N1["Infrastructure<br/><sub>infrastructure-engineer</sub>"]
+        N2["Developer Experience<br/><sub>developer-experience</sub>"]
+        N3["Specialized Domains<br/><sub>domain-specialist</sub>"]
+        N4["Business &amp; Product<br/><sub>product-strategist</sub>"]
+        N5["Research &amp; Analysis<br/><sub>research-analyst</sub>"]
+        T1["Core Development<br/><sub>core-developer</sub>"]
+        T2["Language Specialists<br/><sub>language-specialist</sub>"]
+        T3["Quality &amp; Security<br/><sub>quality-auditor<br/>security-reviewer<br/>debugger</sub>"]
+        T4["Data &amp; AI<br/><sub>data-engineer</sub>"]
+        T5["Meta &amp; Orchestration<br/><sub>orchestration-lead</sub>"]
     end
 
-    O --> L[(".opencode/PLAN.md<br/>plan ledger")]
-    O --> V{{"wippa_verify<br/>exit code = verdict"}}
+    subgraph MCP["MCP servers"]
+        M1[["github"]]
+        M2[["context7"]]
+        M3[["playwright"]]
+    end
 
-    O ==> S1[core-developer]
-    O ==> S2[language-specialist]
-    O ==> S3[infrastructure-engineer]
-    O ==> S4[quality-auditor]
-    O ==> S5[security-reviewer]
-    O ==> S6[debugger]
-    O ==> S7[data-engineer]
-    O ==> S8[developer-experience]
-    O ==> S9[domain-specialist]
-    O ==> S10[product-strategist]
-    O ==> S11[orchestration-lead]
-    O ==> S12[research-analyst]
+    O ==>|delegates| ROSTER
 
-    S11 -.-> M1[["github"]]
-    S1 & S2 & S7 -.-> M2[["context7"]]
-    S4 & S1 -.-> M3[["playwright"]]
+    T5 -.-> M1
+    T1 & T2 & T4 -.-> M2
+    T1 -.-> M3
+    T3 -.->|quality-auditor| M3
+
+    %% layout only
+    L ~~~ N1
+    L ~~~ N2
+    L ~~~ N3
+    L ~~~ N4
+    L ~~~ N5
+    N1 ~~~ T1
+    N2 ~~~ T2
+    N3 ~~~ T3
+    N4 ~~~ T4
+    N5 ~~~ T5
+
+    classDef primary stroke:#6366f1,stroke-width:3px
+    classDef artefact stroke:#f59e0b,stroke-width:2px
+    classDef server stroke:#0ea5e9,stroke-width:2px
+    class O primary
+    class L,V artefact
+    class M1,M2,M3 server
 ```
+
+*Solid: delegation. Dashed: tool access — labelled where a category holds more than one agent.*
 
 <br/>
 
@@ -205,7 +236,7 @@ To use the repository as a live OpenCode project, install it into the checkout:
 ./install.sh --project .
 ```
 
-That creates `.opencode/` holding the agents, the skill and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository.
+That creates `.opencode/` holding the agents, the skill and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository. One caveat: a project install flattens the agent files into `.opencode/agents/`, and the plugin's roster lookups prefer that installed copy over the live `categories/` tree, so while the install is present, edits to `categories/*.md` do not show up in `wippa_subagent_*` results until you re-run the install with `--force` or remove the installed copy.
 
 </details>
 
@@ -263,15 +294,42 @@ Every request is classified before a plan is written, and the tier decides the c
 
 Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so the routing is auditable.
 
+**One request, end to end**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant O as agentWIPPA
+    participant S as Owning subagent
+    participant QA as quality-auditor
+    participant V as wippa_verify
+
+    U->>O: request
+    Note over O: triage the tier and write the plan
+    Note over O,QA: Normal chain: brief → delegate → audit → review
+    O->>S: brief + acceptance criterion
+    S-->>O: diff + structured report
+    O->>QA: review the diff
+    QA-->>O: verdict and findings
+    O->>V: run the acceptance command
+    V-->>O: exit code, stdout, stderr
+    alt zero exit code, reviewer clean
+        O-->>U: report the outcome
+    else non-zero exit or open findings
+        O-->>U: escalate
+    end
+```
+
 ### 2. Two-iteration reviewer cap
 
 ```mermaid
 flowchart LR
-    A[Delegate] --> B[Audit]
-    B -->|findings| C[Revise]
-    C --> B
-    B -->|clean| D([Report done])
-    B -->|"still open after<br/>iteration 2"| E([Escalate to you])
+    D["Delegate"] --> A{"Audit"}
+    A -->|findings| R["Revise"]
+    R -->|"iteration 2"| A
+    A -->|clean| OK(["Report done"])
+    A -->|"still open after<br/>iteration 2"| ESC(["Escalate to you"])
 ```
 
 The review loop runs at most **two iterations** per piece of work. After the second iteration, if the reviewer still reports open findings, the orchestrator stops looping and escalates to you with three things: what is still broken, what a fix would cost, and whether to accept, defer or fund another round. An open finding at report time is disclosed as an open finding, never hidden behind one more attempt.
@@ -318,7 +376,9 @@ Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's e
 | `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied |
 | `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied |
 | `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
-| `research-analyst`, `product-strategist` | allowed | denied | read and web tools only |
+| `research-analyst`, `product-strategist` | allowed | deny all shell | no additional deny rules — read, web and MCP tools remain reachable |
+
+MCP reach is not per-agent: every agent can call the `github`, `context7` and `playwright` servers; the scope of the GitHub token is the boundary for the `github` server.
 
 Subagents cannot start further subagents (`experimental.subagent_depth` is 1).
 

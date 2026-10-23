@@ -249,6 +249,27 @@ test("search matches the category name and the category slug", () => {
   assert.match(byDirectoryName, /infrastructure-engineer/)
 })
 
+test("search treats a zero or negative limit as uncapped", () => {
+  const dir = tempDir()
+  const ids = ["probe-a", "probe-b", "probe-c"]
+  for (const id of ids) {
+    writeFileSync(join(dir, `${id}.md`), "---\ndescription: probe agent\nmode: subagent\n---\n\nbody\n")
+  }
+  const catalog = buildCatalog([dir], [])
+
+  const capped = search(catalog, "probe", 2)
+  assert.match(capped, /Showing 2 of 3/)
+  assert.ok(!capped.includes("`probe-c`"), "the cap hides the third match")
+
+  for (const limit of [0, -5]) {
+    const output = search(catalog, "probe", limit)
+    for (const id of ids) {
+      assert.ok(output.includes(`\`${id}\``), `${id} is shown for limit ${limit}`)
+    }
+    assert.ok(!output.includes("Showing"), `limit ${limit} adds no truncation note`)
+  }
+})
+
 test("get returns the file content of a known agent", () => {
   const catalog = bundleCatalog()
   const { file } = firstCategoryFile()
@@ -577,6 +598,29 @@ test("list falls back to a flat list when the roster is missing", () => {
   assert.match(output, /`solo-agent`/)
 })
 
+test("list treats a zero or negative limit as uncapped", () => {
+  const dir = tempDir()
+  const roster: RosterCategory[] = [
+    { name: "Probe Group", count: 3, agents: ["probe-a", "probe-b", "probe-c"] },
+  ]
+  for (const id of roster[0].agents) {
+    writeFileSync(join(dir, `${id}.md`), "---\ndescription: probe agent\nmode: subagent\n---\n\nbody\n")
+  }
+  const catalog = buildCatalog([dir], roster)
+
+  const capped = list(catalog, roster, undefined, 2)
+  assert.match(capped, /1 more in this category/)
+  assert.ok(!capped.includes("`probe-c`"), "the cap hides the third agent")
+
+  for (const limit of [0, -5]) {
+    const output = list(catalog, roster, undefined, limit)
+    for (const id of roster[0].agents) {
+      assert.ok(output.includes(`\`${id}\``), `${id} is shown for limit ${limit}`)
+    }
+    assert.ok(!output.includes("more in this category"), `limit ${limit} adds no more-line`)
+  }
+})
+
 test("invalid reports the refresh, the counts and the drift", () => {
   const catalog = bundleCatalog()
   const roster = readRoster([CATEGORIES_DIR])
@@ -830,6 +874,31 @@ test("resolveAgentDirs honours OPENCODE_CONFIG_DIR for the global directory", ()
       !dirs.includes(join(home, ".config", "opencode", "agents")),
       "the default location is not indexed when the override is set",
     )
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  }
+})
+
+test("an empty OPENCODE_CONFIG_DIR is treated as unset, like install.sh does", () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousHome = process.env.HOME
+  const home = tempDir()
+  const defaultAgents = join(home, ".config", "opencode", "agents")
+  mkdirSync(defaultAgents, { recursive: true })
+
+  process.env.HOME = home
+  try {
+    for (const value of ["", "   "]) {
+      process.env.OPENCODE_CONFIG_DIR = value
+      const dirs = resolveAgentDirs(tempDir())
+      assert.ok(
+        dirs.includes(defaultAgents),
+        `${JSON.stringify(value)} falls back to the home configuration`,
+      )
+    }
   } finally {
     if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
     else process.env.OPENCODE_CONFIG_DIR = previousConfig

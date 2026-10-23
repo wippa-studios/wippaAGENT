@@ -10,7 +10,15 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search, verify, type VerifyResult } from "./operations.ts"
+import {
+  get,
+  invalid,
+  list,
+  search,
+  verify,
+  type VerifyOptions,
+  type VerifyResult,
+} from "./operations.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -120,12 +128,15 @@ async function loadCatalog(storage: StorageLike, cwd: string): Promise<LoadedCat
 }
 
 /**
- * Coerces a tool-input limit to an integer in 1..1000. A missing or non-finite
- * value takes the caller's default, which is what an unset optional field is.
+ * Coerces a tool-input limit to an integer in 1..1000. The exact value 0 and
+ * any negative number mean "no cap" and coerce to `undefined`, which is the
+ * uncapped value the query helpers read; a missing or non-numeric value takes
+ * the caller's default, which is what an unset optional field is.
  */
 function coerceLimit(value: unknown, fallback: number | undefined): number | undefined {
   const number = typeof value === "number" ? value : Number.NaN
   if (!Number.isFinite(number)) return fallback
+  if (number <= 0) return undefined
   return Math.min(LIMIT_MAX, Math.max(1, Math.floor(number)))
 }
 
@@ -156,7 +167,7 @@ const plugin: PluginPlugin = {
             },
             limit: {
               type: "number",
-              description: "Maximum number of matches to return. Defaults to 20.",
+              description: "Maximum matches to return, 1..1000. Defaults to 20; 0 means no cap.",
             },
           },
           required: ["query"],
@@ -206,7 +217,7 @@ const plugin: PluginPlugin = {
             },
             limit: {
               type: "number",
-              description: "Maximum number of agents to show per category. Defaults to all.",
+              description: "Maximum agents to show per category, 1..1000. Defaults to all; 0 means no cap.",
             },
           },
           additionalProperties: false,
@@ -252,6 +263,10 @@ const plugin: PluginPlugin = {
               type: "string",
               description: "The working directory to run the acceptance command in. Defaults to the current directory.",
             },
+            timeoutMs: {
+              type: "number",
+              description: "Milliseconds before the command is killed. Defaults to 300000; clamped to 1000..3600000.",
+            },
           },
           required: ["command"],
           additionalProperties: false,
@@ -259,7 +274,11 @@ const plugin: PluginPlugin = {
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "verify" })
-          const { command, cwd } = input as { command?: unknown; cwd?: unknown }
+          const { command, cwd, timeoutMs } = input as {
+            command?: unknown
+            cwd?: unknown
+            timeoutMs?: unknown
+          }
           const location = resolve(ctx.location.directory)
           if (
             typeof command !== "string" ||
@@ -280,7 +299,13 @@ const plugin: PluginPlugin = {
           // The default is the location directory, not the server process cwd,
           // and a relative cwd is resolved against it.
           const workingDir = typeof cwd === "string" && cwd.trim() ? resolve(location, cwd) : location
-          const result = verify(command, workingDir)
+          const options: VerifyOptions = { command, cwd: workingDir }
+          // A non-finite value is not a timeout: the default applies instead.
+          // The bounds clamp inside verify.
+          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+            options.timeoutMs = timeoutMs
+          }
+          const result = verify(options)
           return { content: JSON.stringify(result) }
         },
       })

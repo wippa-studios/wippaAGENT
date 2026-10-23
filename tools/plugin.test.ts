@@ -177,6 +177,38 @@ test("subagent_list groups the fixture agents by their roster category", async (
   assert.match(content, /`probe-beta`/)
 })
 
+test("subagent_search treats limit 0 as uncapped and limit 2 as a cap", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  // The bundle ships its own agents beside the fixture ones, so only the
+  // fixture rows are pinned; the cap itself is what the assertion checks.
+  const capped = await runTool(host, "subagent_search", { query: "probe", limit: 2 })
+  assert.match(capped, /Showing 2 of \d+/)
+  assert.ok(!capped.includes("`probe-gamma`"), "the cap hides the third match")
+
+  const uncapped = await runTool(host, "subagent_search", { query: "probe", limit: 0 })
+  for (const id of ["probe-alpha", "probe-beta", "probe-gamma"]) {
+    assert.ok(uncapped.includes(`\`${id}\``), `${id} is shown for limit 0`)
+  }
+  assert.ok(!uncapped.includes("Showing"), "limit 0 adds no truncation note")
+})
+
+test("subagent_list treats limit 0 as uncapped and limit 2 as a cap", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const capped = await runTool(host, "subagent_list", { limit: 2 })
+  assert.match(capped, /1 more in this category/)
+  assert.ok(!capped.includes("`probe-gamma`"), "the cap hides the third agent")
+
+  const uncapped = await runTool(host, "subagent_list", { limit: 0 })
+  assert.match(uncapped, /`probe-gamma`/)
+  assert.ok(!uncapped.includes("more in this category"), "limit 0 adds no more-line")
+})
+
 test("verify runs an acceptance command and returns the verdict as JSON", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
@@ -205,6 +237,26 @@ test("verify rejects a bad command without spawning anything", async () => {
     assert.match(result.stderr, /command must be a non-empty string of at most 10000 characters/)
     assert.equal(result.cwd, root)
   }
+})
+
+test("verify passes timeoutMs through to the command", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const tool = host.tools.find((entry) => entry.name === "verify")
+  assert.ok(tool?.input.properties.timeoutMs, "the tool input exposes timeoutMs")
+
+  const started = Date.now()
+  const result = JSON.parse(await runTool(host, "verify", { command: "sleep 5", timeoutMs: 500 }))
+  const elapsed = Date.now() - started
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "timeout")
+  assert.equal(result.exitCode, -1)
+  // 500 is raised to the 1000ms floor inside verify: far below the 5s the
+  // command would take, and below the 300s default.
+  assert.ok(elapsed >= 500 && elapsed < 3_000, `killed at ~1s rather than waited out (${elapsed}ms)`)
 })
 
 test("editing the roster invalidates the cached catalog", async () => {

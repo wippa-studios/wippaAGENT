@@ -70,9 +70,13 @@ function customAgentIds(): Set<string> {
 // A directory is global when it is the user-level OpenCode agent directory.
 // Everything else — the bundle, the project checkout, an explicit override — is project scope.
 // OPENCODE_CONFIG_DIR is the override install.sh writes to, so the catalog
-// indexes the same scope the installer used.
+// indexes the same scope the installer used. install.sh reads it as
+// `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}`, so an empty or
+// whitespace-only value is unset here too.
 function globalAgentsDir(): string {
-  return join(process.env.OPENCODE_CONFIG_DIR ?? join(homedir(), ".config", "opencode"), "agents")
+  const configDir =
+    process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
+  return join(configDir, "agents")
 }
 
 function realPath(path: string): string {

@@ -62,7 +62,7 @@ Examples:
   ./install.sh --project /path/to/project --uninstall
 
 Requirements:
-  bash and the usual POSIX utilities (cat, cp, ls, mkdir, printf, rm, rmdir).
+  bash and the usual POSIX utilities (cat, cmp, cp, id, ls, mkdir, printf, rm, rmdir).
   Node is needed only for --apply-config.
 EOF
 }
@@ -367,6 +367,7 @@ apply_config() {
 
   node --input-type=module - "$CONFIG_FILE" <<'NODE'
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 
 const configPath = process.argv[2];
 const added = [];
@@ -447,15 +448,42 @@ put(servers, 'playwright', {
 // would resolve against the user's working directory rather than against the
 // location of their config file.
 
-const tempPath = `${configPath}.tmp-${process.pid}`;
+// The temp name is unpredictable so it cannot be pre-created as a symlink or
+// pointed at a file we do not own, and the 'wx' flag makes an existing file at
+// that path an error (EEXIST) rather than something to follow or overwrite.
+const payload = `${JSON.stringify(config, null, 2)}\n`;
+const newTempPath = () => `${configPath}.tmp-${crypto.randomUUID()}`;
+
+let tempPath = newTempPath();
+let wroteTemp = false;
 try {
-  fs.writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  try {
+    fs.writeFileSync(tempPath, payload, { encoding: 'utf8', flag: 'wx' });
+    wroteTemp = true;
+  } catch (error) {
+    if (error.code !== 'EEXIST') {
+      throw error;
+    }
+    // Collision on the random name: one retry with a fresh one, then give up.
+    tempPath = newTempPath();
+    fs.writeFileSync(tempPath, payload, { encoding: 'utf8', flag: 'wx' });
+    wroteTemp = true;
+  }
+  // Preserve the user's chosen mode across the atomic replace, since rename
+  // would otherwise leave the temp file's umask-derived mode in place.
+  try {
+    fs.chmodSync(tempPath, fs.statSync(configPath).mode);
+  } catch {
+    // Best effort: no existing target (or a chmod failure) must not break the write.
+  }
   fs.renameSync(tempPath, configPath);
 } catch (error) {
-  try {
-    fs.unlinkSync(tempPath);
-  } catch {
-    // The temp file may not exist when the write itself failed.
+  if (wroteTemp) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // The temp file may not exist when the write itself failed.
+    }
   }
   console.error(`error: could not write ${configPath}: ${error.message}`);
   process.exit(1);

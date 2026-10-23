@@ -11,7 +11,6 @@ import {
   type RosterCategory,
 } from "./catalog.ts"
 
-const DEFAULT_LIMIT = 20
 const NEAR_MISS_COUNT = 5
 
 function readSafe(path: string): string | undefined {
@@ -78,8 +77,12 @@ function nearestIds(catalog: Catalog, wanted: string, count: number): string[] {
   return scored.slice(0, count).map((entry) => entry.id)
 }
 
-/** Finds agents by name, category or description and renders the matches as a table. */
-export function search(catalog: Catalog, query: string, limit: number = DEFAULT_LIMIT): string {
+/**
+ * Finds agents by name, category or description and renders the matches as a
+ * table. An absent, zero or negative limit means "no cap"; the tool-level
+ * default is applied by the caller.
+ */
+export function search(catalog: Catalog, query: string, limit?: number): string {
   const trimmed = query.trim().toLowerCase()
   if (!trimmed) {
     return [
@@ -112,7 +115,7 @@ export function search(catalog: Catalog, query: string, limit: number = DEFAULT_
     ].join("\n")
   }
 
-  const max = limit > 0 ? limit : matches.length
+  const max = limit !== undefined && limit > 0 ? limit : matches.length
   const shown = matches.slice(0, max)
   const lines = [
     `${matches.length} agent${matches.length === 1 ? "" : "s"} match "${query.trim()}".`,
@@ -296,9 +299,10 @@ export interface VerifyResult {
   exitCode: number
   ok: boolean
   /**
-   * Why the command produced no normal exit code: `timeout`, `output-limit`,
-   * `spawn-error` or `cwd-not-found`. Absent when the command ran to a verdict,
-   * including a non-zero exit code, which is reported through `exitCode`.
+   * Why the command produced no normal exit code: `invalid-command`,
+   * `timeout`, `output-limit`, `spawn-error` or `cwd-not-found`. Absent when
+   * the command ran to a verdict, including a non-zero exit code, which is
+   * reported through `exitCode`.
    */
   reason?: string
   stdout: string
@@ -339,9 +343,11 @@ function clampOption(value: number | undefined, fallback: number, min: number, m
 }
 
 /**
- * Caps one stream at `limit` characters, keeping the head and the tail: a
- * failing command prints its reason last, so a tail-only cut would hide the
- * output the verdict rests on.
+ * Caps one stream at approximately `limit` characters, keeping the head and
+ * the tail: a failing command prints its reason last, so a tail-only cut would
+ * hide the output the verdict rests on. The keep is `2 * floor(limit / 2)`
+ * characters and the truncation marker is added on top, so the returned stream
+ * is about `limit` characters plus the marker.
  */
 function truncateOutput(text: string, limit: number): string {
   if (text.length <= limit) return text
