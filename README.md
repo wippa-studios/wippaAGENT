@@ -18,12 +18,12 @@ Install once, point the config at the orchestrator, and every project gets the s
 ![Tools](https://img.shields.io/badge/tools-5-f59e0b?style=for-the-badge)
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 
-[**Quick Start**](#-quick-start) &nbsp;·&nbsp;
-[**Architecture**](#-architecture) &nbsp;·&nbsp;
-[**The Roster**](#-the-twelve-subagents) &nbsp;·&nbsp;
-[**Orchestrator**](#-how-the-orchestrator-works) &nbsp;·&nbsp;
-[**Tools**](#-the-tools) &nbsp;·&nbsp;
-[**Configuration**](#-configuration)
+[**Quick Start**](#quick-start) &nbsp;·&nbsp;
+[**Architecture**](#architecture) &nbsp;·&nbsp;
+[**The Roster**](#the-twelve-subagents) &nbsp;·&nbsp;
+[**Orchestrator**](#how-the-orchestrator-works) &nbsp;·&nbsp;
+[**Tools**](#the-tools) &nbsp;·&nbsp;
+[**Configuration**](#configuration)
 
 </div>
 
@@ -46,15 +46,15 @@ wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the requ
 
 | | |
 |---|---|
-| 🧭 **Predictable routing** | Every request is triaged into a tier, and the tier decides the chain. The choice is written into the plan, so routing is auditable. |
-| 🔒 **Orchestrator can't cut corners** | `agentWIPPA` has edit and shell denied by design. It plans, delegates and verifies; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. |
-| ✅ **Verdicts from exit codes** | Nothing is reported as done until the acceptance command has returned a zero exit code, and on Normal or High-risk work a reviewer has also seen the diff. |
-| 📒 **Plan survives the session** | The plan ledger lives on disk at `.opencode/PLAN.md`, and the next session reads it first. |
-| 📋 **Structured reports** | Every subagent returns the same fixed schema, so the orchestrator reviews fields rather than prose. |
+| **Predictable routing** | Every request is triaged into a tier, and the tier decides the chain. The choice is written into the plan, so routing is auditable. |
+| **Orchestrator can't cut corners** | `agentWIPPA` has edit and shell denied by design. It plans, delegates and verifies; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. |
+| **Verdicts from exit codes** | Nothing is reported as done until the acceptance command has returned a zero exit code, and on Normal or High-risk work a reviewer has also seen the diff. |
+| **Plan survives the session** | The plan ledger lives on disk at `.opencode/PLAN.md`, and the next session reads it first. |
+| **Structured reports** | Every subagent returns the same fixed schema, so the orchestrator reviews fields rather than prose. |
 
 <br/>
 
-## 🚀 Quick Start
+## Quick Start
 
 **1. Install**
 
@@ -85,7 +85,7 @@ That's it. Every project you open now has the full roster.
 
 <br/>
 
-## 🏗 Architecture
+## Architecture
 
 ```mermaid
 %% The ~~~ links at the end are layout-only and carry no meaning: they keep the roster
@@ -148,7 +148,7 @@ flowchart TB
 
 <br/>
 
-## 📦 Install
+## Install
 
 The installer writes into one of two scopes.
 
@@ -156,7 +156,7 @@ The installer writes into one of two scopes.
 <tr>
 <td width="50%" valign="top">
 
-**🌍 Global**<br/>
+**Global**<br/>
 Every project on this machine.<br/>
 Files land in `~/.config/opencode/`, or in `$OPENCODE_CONFIG_DIR` when that variable is set.
 
@@ -167,7 +167,7 @@ Files land in `~/.config/opencode/`, or in `$OPENCODE_CONFIG_DIR` when that vari
 </td>
 <td width="50%" valign="top">
 
-**📁 Project-local**<br/>
+**Project-local**<br/>
 A single project.<br/>
 Files land in `<project>/.opencode/`.
 
@@ -242,7 +242,7 @@ That creates `.opencode/` holding the agents, the skill and the tools plugin. Wi
 
 <br/>
 
-## 🧑‍💻 The twelve subagents
+## The twelve subagents
 
 | Agent id | Category | Remit |
 |----------|----------|-------|
@@ -261,7 +261,7 @@ That creates `.opencode/` holding the agents, the skill and the tools plugin. Wi
 
 <br/>
 
-## 🎛 The primary agent
+## The primary agent
 
 **`agentWIPPA`** is the orchestrator. It never edits a file and holds no shell of its own; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. Both permissions are denied to it by design, so it cannot bypass the roster.
 
@@ -278,7 +278,7 @@ It holds one line: nothing is reported as done until the acceptance command has 
 
 <br/>
 
-## ⚙️ How the orchestrator works
+## How the orchestrator works
 
 Four behaviours separate this setup from a plain roster of agents.
 
@@ -288,9 +288,9 @@ Every request is classified before a plan is written, and the tier decides the c
 
 | Tier | Applies to | Chain |
 |------|-----------|-------|
-| 🟢 **Trivial** | Single-file, low-risk work with no behavioural, auth, input, secret, dependency, CI or config impact | Straight to the owning implementer. No audit pass. |
-| 🟡 **Normal** | Everything in between | Brief → delegate → audit → review |
-| 🔴 **High-risk** | Auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way | Cheap recon pass before anything is written, then a review that cannot be waived |
+| **Trivial** | Single-file, low-risk work with no behavioural, auth, input, secret, dependency, CI or config impact | Straight to the owning implementer. No audit pass. |
+| **Normal** | Everything in between | Brief → delegate → audit → review |
+| **High-risk** | Auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way | Cheap recon pass before anything is written, then a review that cannot be waived |
 
 Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so the routing is auditable.
 
@@ -386,7 +386,7 @@ Routing — which agent owns what — and the "report only to me" line in every 
 
 <br/>
 
-## 🔌 The three MCP servers
+## The three MCP servers
 
 | Server | What it gives the agents |
 |--------|---------------------------|
@@ -398,7 +398,7 @@ The GitHub server expects `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment. The
 
 <br/>
 
-## 🧰 The tools
+## The tools
 
 The bundled plugin adds five tools: four for finding and reading the roster, and one for checking work.
 
@@ -414,7 +414,7 @@ The `wippa-subagent-search` skill documents the four roster tools, explains whic
 
 <br/>
 
-## 🛠 Configuration
+## Configuration
 
 The agent set is inert until `default_agent` points at the orchestrator. Add it to the config file for the scope you installed into.
 
@@ -467,7 +467,7 @@ Restart OpenCode after changing the config so the new roster is picked up.
 
 <br/>
 
-## 📄 License
+## License
 
 Released under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
