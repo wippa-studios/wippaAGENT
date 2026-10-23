@@ -209,6 +209,62 @@ test("subagent_list treats limit 0 as uncapped and limit 2 as a cap", async () =
   assert.ok(!uncapped.includes("more in this category"), "limit 0 adds no more-line")
 })
 
+test("subagent_search accepts the 1000 boundary and a limit above the maximum", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  // Above the maximum the limit clamps to 1000, which is larger than every
+  // fixture match, so both values must take the same path as an uncapped
+  // search: 1001 is accepted rather than rejected as a bad input.
+  for (const limit of [1_000, 1_001]) {
+    const content = await runTool(host, "subagent_search", { query: "probe", limit })
+    assert.match(content, /agents? match "probe"\./)
+    for (const id of ["probe-alpha", "probe-beta", "probe-gamma"]) {
+      assert.ok(content.includes(`\`${id}\``), `${id} is shown for limit ${limit}`)
+    }
+    assert.ok(!content.includes("Showing"), `limit ${limit} truncates nothing`)
+  }
+})
+
+test("subagent_list accepts a limit above the maximum without truncating a small category", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "subagent_list", { limit: 1_001 })
+  assert.match(content, /## Probe Group \(3\)/)
+  for (const id of ["probe-alpha", "probe-beta", "probe-gamma"]) {
+    assert.ok(content.includes(`\`${id}\``), `${id} is shown`)
+  }
+  assert.ok(
+    !content.includes("more in this category"),
+    "the clamped limit is above every category",
+  )
+})
+
+test("a non-string query, id or category is treated as absent, not coerced", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  // A number in a string position must reach the friendly message path rather
+  // than throw or match the literal text.
+  assert.match(await runTool(host, "subagent_search", { query: 123 }), /A query is required\./)
+
+  const get = await runTool(host, "subagent_get", { id: 42 })
+  assert.match(
+    get,
+    /No agent with the id "" is installed\./,
+    "the number is absent, not stringified to \"42\"",
+  )
+  assert.match(get, /wippa_subagent_search/)
+
+  const list = await runTool(host, "subagent_list", { category: 7 })
+  assert.match(list, /## Probe Group \(3\)/)
+  assert.match(list, /`probe-alpha`/)
+})
+
 test("verify runs an acceptance command and returns the verdict as JSON", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)

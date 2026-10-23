@@ -364,7 +364,7 @@ The orchestrator reviews those fields rather than the prose around them. A missi
 
 ## Trust model
 
-Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced, and the one deliberate exception is `wippa_verify`, which any agent could call and which runs the command it is given, bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced, and the one deliberate exception is `wippa_verify`, which runs the command you give it — no rule in this setup denies it, and the plugin performs no permission check first; the call is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
 
 **Per-agent enforcement**
 
@@ -378,7 +378,7 @@ Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's e
 | `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
 | `research-analyst`, `product-strategist` | allowed | deny all shell | no additional deny rules — read, web and MCP tools remain reachable |
 
-MCP reach is not per-agent: every agent can call the `github`, `context7` and `playwright` servers; the scope of the GitHub token is the boundary for the `github` server.
+No rule restricts MCP reach per agent: every agent can reach the `github`, `context7` and `playwright` servers, and the scope of the GitHub token is the boundary for the `github` server.
 
 Subagents cannot start further subagents (`experimental.subagent_depth` is 1).
 
@@ -443,7 +443,7 @@ The installer prints the full set of keys it expects before the summary, whether
 | `agents.explore` | Set to `disabled: true`, for the same reason. |
 | `agents.build` | Demotes the built-in coding agent to a subagent and denies it the `subagent` action, so the orchestrator keeps control of the work and the build agent writes the code. |
 | `mcp.servers` | Registers the `github`, `context7` and `playwright` servers. |
-| `permissions`, `compaction`, `experimental.subagent_depth` | Checkout-only keys. They are set in the repository's own `opencode.json`: `permissions` allows `subagent` on `*`, `compaction` summarises long sessions, and `subagent_depth` is `1`, so a subagent cannot start another subagent. `--apply-config` does not merge them, so an installed scope uses OpenCode's defaults, which match. |
+| `permissions`, `compaction`, `experimental.subagent_depth` | Checkout-only keys. They are set in the repository's own `opencode.json`: `permissions` allows `subagent` on `*`, `compaction` summarises long sessions, and `subagent_depth` is `1`, so a subagent cannot start another subagent. `--apply-config` does not merge them, so an installed scope uses OpenCode's documented defaults, which match. |
 
 The skill and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically.
 
