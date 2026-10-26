@@ -16,7 +16,7 @@ Install once, point the config at the orchestrator, and every project gets the s
 [![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
-![Tools](https://img.shields.io/badge/tools-5-f59e0b?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-6-f59e0b?style=for-the-badge)
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 
 [**Quick Start**](#quick-start) &nbsp;·&nbsp;
@@ -401,7 +401,7 @@ The GitHub server expects `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment. The
 
 ## The tools
 
-The bundled plugin adds five tools: four for finding and reading the roster, and one for checking work.
+The bundled plugin adds six tools: four for finding and reading the roster, one for checking work, and one for reading a diff.
 
 The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override, and the bundle's own tree are indexed in full.
 
@@ -412,6 +412,7 @@ The catalog is the roster: the twelve agents this bundle ships, plus any id list
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
 | `wippa_verify` | Did the acceptance command pass? Runs it in a shell asynchronously, with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. |
+| `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries with the patch, additions, deletions and status, so the orchestrator can read the diff itself without a shell. |
 
 The `wippa-subagent-search` skill documents the four roster tools, explains which one to reach for, and gives the equivalent procedure using `read`, `glob` and `grep` when the plugin is not connected.
 

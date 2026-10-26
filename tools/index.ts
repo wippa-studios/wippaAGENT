@@ -86,17 +86,55 @@ interface PluginPermission {
 
 /** The plugin context, reduced to the members this plugin reads. */
 interface PluginContext {
-  readonly location: { readonly directory: string }
+  readonly location: {
+    readonly directory: string
+    readonly project: { readonly directory: string; readonly canonical: string }
+  }
   readonly storage: StorageLike
   readonly permission: PluginPermission
+  readonly vcs: PluginVcs
   readonly tool: {
     readonly transform: (callback: (editor: PluginToolEditor) => void) => Promise<unknown>
   }
 }
 
+/** One file in a diff, as the VCS service reports it. */
+interface PluginFileDiff {
+  file: string
+  patch: string
+  additions: number
+  deletions: number
+  status: "added" | "deleted" | "modified"
+}
+
+/**
+ * The VCS service. `diff` resolves against a scope rather than the process
+ * cwd, because a session can run in a worktree that is not where the plugin
+ * was loaded.
+ */
+interface PluginVcs {
+  diff(
+    input: {
+      directory: string
+      worktree: string
+      canonical: string
+      mode: "working" | "branch" | "committed"
+      base?: string
+      context: number
+      maxOutputBytes: number
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<readonly PluginFileDiff[]>
+}
+
 const CACHE_KEY = "catalog"
 const COMMAND_MAX_LENGTH = 10_000
 const LIMIT_MAX = 1_000
+const DIFF_CONTEXT_DEFAULT = 3
+const DIFF_CONTEXT_MAX = 100
+const DIFF_OUTPUT_DEFAULT = 1_000_000
+const DIFF_OUTPUT_MIN = 1_024
+const DIFF_OUTPUT_MAX = 8_388_608
 
 // The storage API is awaited, so it may be synchronous or asynchronous.
 interface StorageLike {
@@ -169,6 +207,17 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
+/**
+ * Coerces a tool-input number to an integer in `min..max`. A missing or
+ * non-finite value takes the default; a finite one is clamped, not rejected,
+ * because the caller cannot know the bounds the service enforces.
+ */
+function coerceBounded(value: unknown, fallback: number, min: number, max: number): number {
+  const number = typeof value === "number" ? value : Number.NaN
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(number)))
+}
+
 const plugin: PluginPlugin = {
   id: "wippa-subagent-tools",
   async setup(ctx) {
@@ -176,7 +225,7 @@ const plugin: PluginPlugin = {
       editor.namespace({
         name: "wippa",
         description:
-          "Find, inspect and refresh the wippaAGENT subagent catalog, and run acceptance commands with a real exit code.",
+          "Find, inspect and refresh the wippaAGENT subagent catalog, run acceptance commands with a real exit code, and read diffs as structured files.",
       })
 
       editor.add({
@@ -343,6 +392,85 @@ const plugin: PluginPlugin = {
           }
           const result = await verify(options)
           return { content: JSON.stringify(result) }
+        },
+      })
+
+      editor.add({
+        name: "diff",
+        description:
+          "Read the working, branch or committed diff as structured per-file patches with additions and deletions, so a review reads files and line counts instead of raw console text.",
+        input: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              description:
+                "Which diff to read: working (uncommitted), branch (against the branch base) or committed. Defaults to working.",
+            },
+            base: {
+              type: "string",
+              description: "The git ref to diff against, for branch or committed mode.",
+            },
+            context: {
+              type: "number",
+              description: `Lines of context around each hunk. Defaults to ${DIFF_CONTEXT_DEFAULT}; clamped to 0..${DIFF_CONTEXT_MAX}.`,
+            },
+            maxOutputBytes: {
+              type: "number",
+              description: `Byte cap for the diff. Defaults to ${DIFF_OUTPUT_DEFAULT}; clamped to ${DIFF_OUTPUT_MIN}..${DIFF_OUTPUT_MAX}.`,
+            },
+          },
+          additionalProperties: false,
+        },
+        options: { namespace: "wippa", codemode: false },
+        execute: async (input, context) => {
+          await context.progress({ status: "diff" })
+          const { mode, base, context: contextLines, maxOutputBytes } = input as {
+            mode?: unknown
+            base?: unknown
+            context?: unknown
+            maxOutputBytes?: unknown
+          }
+          const requestedMode = mode === undefined ? "working" : mode
+          if (
+            requestedMode !== "working" &&
+            requestedMode !== "branch" &&
+            requestedMode !== "committed"
+          ) {
+            return {
+              content: JSON.stringify({ error: "mode must be one of working, branch or committed" }),
+            }
+          }
+
+          const options: Parameters<PluginVcs["diff"]>[0] = {
+            directory: resolve(ctx.location.directory),
+            worktree: resolve(ctx.location.project.directory),
+            canonical: resolve(ctx.location.project.canonical),
+            mode: requestedMode,
+            context: coerceBounded(contextLines, DIFF_CONTEXT_DEFAULT, 0, DIFF_CONTEXT_MAX),
+            maxOutputBytes: coerceBounded(
+              maxOutputBytes,
+              DIFF_OUTPUT_DEFAULT,
+              DIFF_OUTPUT_MIN,
+              DIFF_OUTPUT_MAX,
+            ),
+          }
+          if (typeof base === "string" && base.trim()) options.base = base.trim()
+
+          try {
+            // The signal is forwarded, so a cancelled call stops the service
+            // work as well as waiting for it. The service reports a refusal as
+            // a rejection, which becomes structured output rather than a
+            // half-rendered patch list.
+            const files = await ctx.vcs.diff(options, { signal: context.signal })
+            return { content: JSON.stringify(files) }
+          } catch (error) {
+            return {
+              content: JSON.stringify({
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            }
+          }
         },
       })
     })

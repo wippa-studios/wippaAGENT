@@ -49,14 +49,33 @@ interface PermissionCall {
 }
 
 interface FakeContext {
-  location: { directory: string }
+  location: { directory: string; project: { directory: string; canonical: string } }
   storage: {
     get(key: string): Promise<unknown>
     set(key: string, value: unknown): Promise<void>
     remove(key: string): Promise<void>
   }
   permission: { assert(input: PermissionCall): Promise<void> }
+  vcs: { diff(input: VcsDiffCall, options?: { signal?: AbortSignal }): Promise<readonly DiffFile[]> }
   tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
+}
+
+interface VcsDiffCall {
+  directory: string
+  worktree: string
+  canonical: string
+  mode: string
+  base?: string
+  context: number
+  maxOutputBytes: number
+}
+
+interface DiffFile {
+  file: string
+  patch: string
+  additions: number
+  deletions: number
+  status: "added" | "deleted" | "modified"
 }
 
 const setup = plugin.setup as unknown as (context: FakeContext) => Promise<void> | void
@@ -69,17 +88,29 @@ interface FakeHost {
   permissionCalls: PermissionCall[]
   /** Set to reject the next assertion, the way a deny rule does. */
   denyPermission(reason: string): void
+  /** Every `vcs.diff` call the plugin made, in order, with the signal it passed. */
+  diffCalls: (VcsDiffCall & { signal?: AbortSignal })[]
+  /** The files the fake VCS returns from a diff call. */
+  setDiffFiles(files: readonly DiffFile[]): void
+  /** Make diff calls reject, the way a failing git command does. */
+  failDiff(message: string): void
 }
 
-function fakeHost(directory: string): FakeHost {
+function fakeHost(
+  directory: string,
+  project: { directory: string; canonical: string } = { directory, canonical: directory },
+): FakeHost {
   const cache = new Map<string, unknown>()
   const tools: FakeToolDefinition[] = []
   const permissionCalls: PermissionCall[] = []
+  const diffCalls: (VcsDiffCall & { signal?: AbortSignal })[] = []
   let namespace: { name: string; description?: string } | undefined
   let denial: string | undefined
+  let diffFiles: readonly DiffFile[] = []
+  let diffError: Error | undefined
 
   const context: FakeContext = {
-    location: { directory },
+    location: { directory, project },
     storage: {
       async get(key) {
         return cache.get(key)
@@ -99,6 +130,13 @@ function fakeHost(directory: string): FakeHost {
           error.name = "ToolError"
           throw error
         }
+      },
+    },
+    vcs: {
+      async diff(input, options) {
+        diffCalls.push({ ...input, signal: options?.signal })
+        if (diffError !== undefined) throw diffError
+        return diffFiles
       },
     },
     tool: {
@@ -122,6 +160,13 @@ function fakeHost(directory: string): FakeHost {
     permissionCalls,
     denyPermission(reason) {
       denial = reason
+    },
+    diffCalls,
+    setDiffFiles(files) {
+      diffFiles = files
+    },
+    failDiff(message) {
+      diffError = new Error(message)
     },
   }
 }
@@ -182,7 +227,7 @@ function probeFixture(rosterBeside = false): { root: string; agents: string; ros
 
 // ---------------------------------------------------------------- tests
 
-test("setup registers the five wippa tools in the wippa namespace", async () => {
+test("setup registers the six wippa tools in the wippa namespace", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -190,7 +235,7 @@ test("setup registers the five wippa tools in the wippa namespace", async () => 
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     host.tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify"],
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff"],
   )
   for (const tool of host.tools) {
     const expected =
@@ -209,7 +254,7 @@ test("setup registers the five wippa tools in the wippa namespace", async () => 
   assert.equal(host.namespace()?.name, "wippa")
   assert.equal(
     host.namespace()?.description,
-    "Find, inspect and refresh the wippaAGENT subagent catalog, and run acceptance commands with a real exit code.",
+    "Find, inspect and refresh the wippaAGENT subagent catalog, run acceptance commands with a real exit code, and read diffs as structured files.",
   )
 })
 
@@ -502,6 +547,78 @@ test("a custom global agent is in the catalog when it is listed in WIPPA_CUSTOM_
     if (previousIds === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
     else process.env.WIPPA_CUSTOM_AGENT_IDS = previousIds
   }
+})
+
+test("diff reads the working diff as structured files", async () => {
+  const { root } = probeFixture()
+  const worktree = join(root, "worktree")
+  const canonical = join(root, "canonical")
+  const host = fakeHost(root, { directory: worktree, canonical })
+  const files = [
+    { file: "src/a.ts", patch: "@@ -1 +1 @@\n-old\n+new\n", additions: 1, deletions: 1, status: "modified" as const },
+    { file: "src/b.ts", patch: "", additions: 4, deletions: 0, status: "added" as const },
+  ]
+  host.setDiffFiles(files)
+  await setup(host.context)
+
+  const controller = new AbortController()
+  const content = await runTool(host, "diff", {}, controller.signal)
+
+  assert.deepEqual(JSON.parse(content), files)
+  assert.equal(host.diffCalls.length, 1)
+  assert.deepEqual(host.diffCalls[0], {
+    directory: root,
+    worktree,
+    canonical,
+    mode: "working",
+    context: 3,
+    maxOutputBytes: 1_000_000,
+    signal: controller.signal,
+  })
+})
+
+test("diff passes the requested mode and base and clamps its bounds", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  await runTool(host, "diff", {
+    mode: "branch",
+    base: "origin/main",
+    context: 1_000,
+    maxOutputBytes: 1,
+  })
+
+  const call = host.diffCalls[0]!
+  assert.equal(call.mode, "branch")
+  assert.equal(call.base, "origin/main")
+  assert.equal(call.context, 100)
+  assert.equal(call.maxOutputBytes, 1_024)
+})
+
+test("diff refuses an unknown mode without asking the VCS", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "diff", { mode: "staged" })
+
+  assert.deepEqual(JSON.parse(content), {
+    error: "mode must be one of working, branch or committed",
+  })
+  assert.equal(host.diffCalls.length, 0)
+})
+
+test("diff reports a VCS failure as structured output instead of throwing", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.failDiff("not a git repository")
+  await setup(host.context)
+
+  const content = await runTool(host, "diff", { base: 42 })
+
+  assert.deepEqual(JSON.parse(content), { error: "not a git repository" })
+  assert.equal(host.diffCalls[0]?.base, undefined, "a non-string base is absent")
 })
 
 test("editing the roster invalidates the cached catalog", async () => {
