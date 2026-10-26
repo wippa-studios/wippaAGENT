@@ -403,6 +403,8 @@ The GitHub server expects `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment. The
 
 The bundled plugin adds five tools: four for finding and reading the roster, and one for checking work.
 
+The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override, and the bundle's own tree are indexed in full.
+
 | Tool | Question it answers |
 |------|---------------------|
 | `wippa_subagent_search` | Which agents match this task, by name, by category or by a word from their description? |
@@ -459,7 +461,7 @@ The skill and the tools plugin need no configuration entry. They are installed i
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | The `github` MCP server |
 | `WIPPA_AGENT_REGISTRY` | See `env.example` |
 | `WIPPA_AGENT_DIR` | See `env.example` |
-| `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration; exempt from roster drift reporting. Used by the tools plugin. |
+| `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration. They are indexed alongside the roster and are exempt from roster drift reporting. Used by the tools plugin. |
 
 > [!WARNING]
 > `opencode debug config` resolves and prints the value of `GITHUB_PERSONAL_ACCESS_TOKEN` in clear text. Treat that output as a secret, and do not paste it into an issue or a chat.

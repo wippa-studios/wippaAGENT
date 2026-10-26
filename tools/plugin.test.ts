@@ -429,6 +429,61 @@ test("verify refuses the literal shell patterns the agent set denies", async () 
   assert.equal(harmless.ok, true)
 })
 
+test("an unrelated agent in the global directory is not in the catalog", async () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = mkdtempSync(join(tmpdir(), "wippa-plugin-global-"))
+  const globalAgents = join(configDir, "agents")
+  mkdirSync(globalAgents, { recursive: true })
+  writeFileSync(
+    join(globalAgents, "foreign-auditor.md"),
+    probeAgent("An unrelated global agent installed for another project."),
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const { root } = probeFixture()
+    const host = fakeHost(root)
+    await setup(host.context)
+
+    const found = await runTool(host, "subagent_search", { query: "foreign-auditor" })
+    assert.match(found, /No agent matches "foreign-auditor"/)
+    assert.ok(!(await runTool(host, "subagent_list", {})).includes("foreign-auditor"))
+    assert.match(await runTool(host, "subagent_list", {}), /## Probe Group \(3\)/)
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("a custom global agent is in the catalog when it is listed in WIPPA_CUSTOM_AGENT_IDS", async () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousIds = process.env.WIPPA_CUSTOM_AGENT_IDS
+  const configDir = mkdtempSync(join(tmpdir(), "wippa-plugin-global-"))
+  const globalAgents = join(configDir, "agents")
+  mkdirSync(globalAgents, { recursive: true })
+  writeFileSync(
+    join(globalAgents, "custom-probe.md"),
+    probeAgent("A user-owned global agent."),
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  process.env.WIPPA_CUSTOM_AGENT_IDS = "custom-probe"
+  try {
+    const { root } = probeFixture()
+    const host = fakeHost(root)
+    await setup(host.context)
+
+    const found = await runTool(host, "subagent_search", { query: "custom-probe" })
+    assert.match(found, /custom-probe/)
+    assert.match(found, /A user-owned global agent\./)
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousIds === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previousIds
+  }
+})
+
 test("editing the roster invalidates the cached catalog", async () => {
   const { root, roster } = probeFixture()
   const host = fakeHost(root)

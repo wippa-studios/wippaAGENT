@@ -135,7 +135,7 @@ async function loadCatalog(storage: StorageLike, cwd: string): Promise<LoadedCat
   if (
     cached &&
     cached.catalog &&
-    cached.fingerprint === scanFingerprint(dirs) &&
+    cached.fingerprint === scanFingerprint(dirs, roster) &&
     cached.rosterFingerprint === rosterDigest
   ) {
     return { catalog: cached.catalog, roster }

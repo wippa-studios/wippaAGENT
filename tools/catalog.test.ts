@@ -407,6 +407,113 @@ test("scanFingerprint follows the scope precedence of the catalog", () => {
   }
 })
 
+test("a global directory contributes only the agents the roster names", () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "core-developer.md"),
+    "---\ndescription: global core developer\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(globalDir, "foreign-auditor.md"),
+    "---\ndescription: an unrelated global agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const roster: RosterCategory[] = [
+      { name: "Core Development", count: 1, agents: ["core-developer"] },
+    ]
+    const catalog = buildCatalog([globalDir], roster)
+
+    assert.deepEqual(
+      catalog.agents.map((entry) => entry.id),
+      ["core-developer"],
+      "the unrelated global agent is not indexed",
+    )
+    assert.equal(catalog.agents[0]?.scope, "global")
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("WIPPA_CUSTOM_AGENT_IDS adds a listed global agent to the catalog", () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousIds = process.env.WIPPA_CUSTOM_AGENT_IDS
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "claim-skeptic.md"),
+    "---\ndescription: a user-owned global agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  process.env.WIPPA_CUSTOM_AGENT_IDS = "claim-skeptic"
+  try {
+    const roster: RosterCategory[] = [{ name: "Core Development", count: 1, agents: ["core-developer"] }]
+    const catalog = buildCatalog([globalDir], roster)
+
+    assert.deepEqual(catalog.agents.map((entry) => entry.id), ["claim-skeptic"])
+    assert.equal(catalog.agents[0]?.category, undefined, "a custom agent carries no roster category")
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousIds === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previousIds
+  }
+})
+
+test("scanFingerprint ignores a foreign file in the global directory", () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "core-developer.md"),
+    "---\ndescription: global core developer\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const roster: RosterCategory[] = [
+      { name: "Core Development", count: 1, agents: ["core-developer"] },
+    ]
+    const before = scanFingerprint([globalDir], roster)
+    writeFileSync(
+      join(globalDir, "foreign-auditor.md"),
+      "---\ndescription: an unrelated global agent\nmode: subagent\n---\n\nbody\n",
+    )
+
+    assert.equal(scanFingerprint([globalDir], roster), before, "the foreign file is not indexed")
+    assert.equal(
+      scanFingerprint([globalDir], roster),
+      fingerprint(buildCatalog([globalDir], roster)),
+      "the scan and the build agree on what is indexed",
+    )
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("a project directory still indexes every file, roster or not", () => {
+  const projectDir = tempDir()
+  writeFileSync(
+    join(projectDir, "team-agent.md"),
+    "---\ndescription: a project-local agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  const roster: RosterCategory[] = [{ name: "Core Development", count: 1, agents: ["core-developer"] }]
+  const catalog = buildCatalog([projectDir], roster)
+
+  assert.deepEqual(catalog.agents.map((entry) => entry.id), ["team-agent"])
+  assert.equal(catalog.agents[0]?.scope, "project")
+})
+
 test("describeDrift reports a deliberately mismatched roster", () => {
   const catalog = bundleCatalog()
   const mismatched: RosterCategory[] = [

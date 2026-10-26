@@ -464,6 +464,35 @@ export function readRoster(dirs: string[]): RosterCategory[] {
   return parseRoster(text)
 }
 
+/** Every agent id the roster lists. */
+function rosterIds(roster: RosterCategory[]): Set<string> {
+  const ids = new Set<string>()
+  for (const category of roster) {
+    for (const id of category.agents) ids.add(id)
+  }
+  return ids
+}
+
+/**
+ * Whether a file found in `dir` belongs to this catalog.
+ *
+ * A project directory is an explicit choice — the checkout, a project-local
+ * install, or a `WIPPA_AGENT_DIR` override — so every file in it is indexed.
+ * The global directory is shared with every other agent the user has installed
+ * for every project, and indexing all of it buries the twelve agents this
+ * bundle ships under unrelated ones. Only the roster's agents, plus the ids
+ * listed in `WIPPA_CUSTOM_AGENT_IDS`, are part of this catalog.
+ */
+function belongsToBundle(
+  id: string,
+  scope: AgentScope,
+  listed: Set<string>,
+  custom: Set<string>,
+): boolean {
+  if (scope === "project") return true
+  return listed.has(id) || custom.has(id)
+}
+
 /**
  * Reads every agent definition found in the given directories. Project scope
  * overrides global scope for the same agent id.
@@ -471,6 +500,8 @@ export function readRoster(dirs: string[]): RosterCategory[] {
 export function buildCatalog(dirs: string[], roster: RosterCategory[] = readRoster(dirs)): Catalog {
   const byId = new Map<string, AgentEntry>()
   const rosterCategory = new Map<string, string>()
+  const listed = rosterIds(roster)
+  const custom = customAgentIds()
   for (const category of roster) {
     for (const id of category.agents) {
       if (!rosterCategory.has(id)) rosterCategory.set(id, category.name)
@@ -481,6 +512,7 @@ export function buildCatalog(dirs: string[], roster: RosterCategory[] = readRost
     const scope = scopeFor(dir)
     for (const found of listAgentFiles(dir)) {
       const id = basename(found.path, ".md")
+      if (!belongsToBundle(id, scope, listed, custom)) continue
       const stats = statSafe(found.path)
       if (!stats) continue
 
@@ -549,18 +581,25 @@ export function fingerprint(catalog: Catalog): string {
  * the selection rules of `buildCatalog` — the same agent id resolves to the
  * same file — and reads each file to hash its content, so it matches
  * `fingerprint` for the same directories and can be used as a cheaper cache
- * check than a full build.
+ * check than a full build. The roster is read when it is not supplied, because
+ * the roster decides which files of a global directory are indexed.
  */
-export function scanFingerprint(dirs: string[]): string {
+export function scanFingerprint(
+  dirs: string[],
+  roster: RosterCategory[] = readRoster(dirs),
+): string {
   const byId = new Map<string, { scope: AgentScope; value: string }>()
+  const listed = rosterIds(roster)
+  const custom = customAgentIds()
 
   for (const dir of dirs) {
     const scope = scopeFor(dir)
     for (const file of listAgentFiles(dir)) {
+      const id = basename(file.path, ".md")
+      if (!belongsToBundle(id, scope, listed, custom)) continue
       const stats = statSafe(file.path)
       if (!stats) continue
 
-      const id = basename(file.path, ".md")
       const content = readSafe(file.path) ?? ""
       const value = triple(file.path, stats.mtimeMs, stats.size, digestOf(content))
       const existing = byId.get(id)
