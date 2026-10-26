@@ -25,7 +25,7 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search, verify } from "./operations.ts"
+import { deniedPattern, get, invalid, list, search, verify } from "./operations.ts"
 
 const BUNDLE_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const CATEGORIES_DIR = join(BUNDLE_ROOT, "categories")
@@ -630,6 +630,40 @@ test("invalid reports the refresh, the counts and the drift", () => {
   assert.ok(!output.includes("Cache cleared"), "the refresh line states the fact without the overclaim")
   assert.match(output, new RegExp(`Agents indexed: ${catalog.agents.length}`))
   assert.match(output, /Drift against the roster/)
+})
+
+test("deniedPattern names the shell rules the agent set ships", () => {
+  assert.equal(deniedPattern("rm -rf build"), "rm -rf *")
+  assert.equal(deniedPattern("rm -rf /"), "rm -rf *")
+  assert.equal(deniedPattern("sudo apt-get install x"), "sudo *")
+  assert.equal(deniedPattern("git push --force origin main"), "git push --force *")
+  assert.equal(deniedPattern("npm test && sudo make install"), "sudo *")
+})
+
+test("deniedPattern leaves ordinary commands alone", () => {
+  for (const command of [
+    "npm test",
+    "echo rm -rf sudo",
+    "git push origin main",
+    "rm -f build/output.js",
+    "pnpm --filter web run build",
+  ]) {
+    assert.equal(deniedPattern(command), undefined, command)
+  }
+})
+
+test("verify refuses a denied pattern and never spawns the command", () => {
+  const dir = tempDir()
+  const marker = join(dir, "marker.txt")
+  writeFileSync(marker, "untouched\n")
+
+  const result = verify({ command: "rm -rf *", cwd: dir })
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "denied-pattern")
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /rm -rf \*/)
+  assert.equal(readFileSync(marker, "utf8"), "untouched\n", "nothing ran")
 })
 
 test("verify marks a passing acceptance command as ok", () => {

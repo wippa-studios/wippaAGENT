@@ -293,6 +293,26 @@ export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
   return lines.join("\n")
 }
 
+/**
+ * The literal shell patterns every agent definition denies, repeated here as a
+ * backstop. `wippa_verify` spawns a shell, so without this a subagent could run
+ * through the tool exactly what its frontmatter denies to `shell`, and a host
+ * with no permission rules configured would have no guard at all. The list is
+ * deliberately narrow: it mirrors the rules the agent files ship, and an
+ * acceptance command that deletes a tree, elevates privileges or force-pushes is
+ * not an acceptance command this set runs.
+ */
+const DENIED_PATTERNS: readonly { pattern: RegExp; label: string }[] = [
+  { pattern: /(^|[;&|]\s*)rm\s+-rf\s+\S/, label: "rm -rf *" },
+  { pattern: /(^|[;&|]\s*)sudo\b/, label: "sudo *" },
+  { pattern: /(^|[;&|]\s*)git\s+push\s+(--force|-f)\b/, label: "git push --force *" },
+]
+
+/** The denied pattern a command matches, if any. */
+export function deniedPattern(command: string): string | undefined {
+  return DENIED_PATTERNS.find((entry) => entry.pattern.test(command))?.label
+}
+
 /** The verdict of one acceptance-command run. */
 export interface VerifyResult {
   command: string
@@ -300,9 +320,9 @@ export interface VerifyResult {
   ok: boolean
   /**
    * Why the command produced no normal exit code: `invalid-command`,
-   * `timeout`, `output-limit`, `spawn-error` or `cwd-not-found`. Absent when
-   * the command ran to a verdict, including a non-zero exit code, which is
-   * reported through `exitCode`.
+   * `denied-pattern`, `timeout`, `output-limit`, `spawn-error` or
+   * `cwd-not-found`. Absent when the command ran to a verdict, including a
+   * non-zero exit code, which is reported through `exitCode`.
    */
   reason?: string
   stdout: string
@@ -383,6 +403,19 @@ export function verify(command: string | VerifyOptions, cwd?: string): VerifyRes
     64,
     Number.MAX_SAFE_INTEGER,
   )
+
+  const refused = deniedPattern(target)
+  if (refused) {
+    return {
+      command: target,
+      exitCode: -1,
+      ok: false,
+      reason: "denied-pattern",
+      stdout: "",
+      stderr: `The acceptance command matches a denied pattern (${refused}). This tool runs a shell and does not bypass the shell rules the agent definitions ship.`,
+      cwd: options.cwd === undefined ? process.cwd() : resolve(options.cwd),
+    }
+  }
 
   const workingDir = options.cwd === undefined ? process.cwd() : resolve(options.cwd)
   if (!isDirectory(workingDir)) {

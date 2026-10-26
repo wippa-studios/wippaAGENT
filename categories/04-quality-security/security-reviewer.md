@@ -15,6 +15,15 @@ permissions:
   - action: edit
     resource: "*"
     effect: deny
+  - action: verify
+    resource: "rm -rf *"
+    effect: deny
+  - action: verify
+    resource: "sudo *"
+    effect: deny
+  - action: verify
+    resource: "git push --force *"
+    effect: deny
 ---
 
 # Security Reviewer

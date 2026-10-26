@@ -52,19 +52,43 @@ interface PluginToolDefinition {
     required?: string[]
     additionalProperties?: boolean
   }
-  options?: { namespace?: string; codemode?: boolean }
+  options?: { namespace?: string; codemode?: boolean; permission?: string }
   execute(input: unknown, context: PluginToolContext): Promise<{ content: string }>
 }
 
 /** The context a tool execution receives. */
 interface PluginToolContext {
+  readonly sessionID: string
+  readonly agent: string
+  readonly messageID: string
+  readonly id: string
+  readonly signal: AbortSignal
   progress(update: { status: string }): Promise<void>
+}
+
+/**
+ * The permission check. `assert` evaluates the session's permission rules for
+ * the action and resources, prompts when a rule resolves to `ask`, and rejects
+ * when a rule denies. It is what makes `wippa_verify` obey the same agent rules
+ * that `shell` obeys.
+ */
+interface PluginPermission {
+  assert(input: {
+    sessionID: string
+    agent?: string
+    action: string
+    resources: string[]
+    source?: { type: "tool"; messageID: string; id: string }
+    save?: string[]
+    metadata?: Record<string, unknown>
+  }): Promise<void>
 }
 
 /** The plugin context, reduced to the members this plugin reads. */
 interface PluginContext {
   readonly location: { readonly directory: string }
   readonly storage: StorageLike
+  readonly permission: PluginPermission
   readonly tool: {
     readonly transform: (callback: (editor: PluginToolEditor) => void) => Promise<unknown>
   }
@@ -271,7 +295,7 @@ const plugin: PluginPlugin = {
           required: ["command"],
           additionalProperties: false,
         },
-        options: { namespace: "wippa", codemode: false },
+        options: { namespace: "wippa", codemode: false, permission: "verify" },
         execute: async (input, context) => {
           await context.progress({ status: "verify" })
           const { command, cwd, timeoutMs } = input as {
@@ -296,6 +320,17 @@ const plugin: PluginPlugin = {
             }
             return { content: JSON.stringify(failure) }
           }
+          // The check runs before anything is spawned, so a denied rule stops
+          // the command rather than reporting its exit code. A rejection is
+          // rethrown, not turned into output: the model should see the denial.
+          await ctx.permission.assert({
+            sessionID: context.sessionID,
+            agent: context.agent,
+            source: { type: "tool", messageID: context.messageID, id: context.id },
+            action: "verify",
+            resources: [command],
+            save: [command],
+          })
           // The default is the location directory, not the server process cwd,
           // and a relative cwd is resolved against it.
           const workingDir = typeof cwd === "string" && cwd.trim() ? resolve(location, cwd) : location

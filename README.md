@@ -365,19 +365,19 @@ The orchestrator reviews those fields rather than the prose around them. A missi
 
 ## Trust model
 
-Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced, and the one deliberate exception is `wippa_verify`, which runs the command you give it — no rule in this setup denies it, and the plugin performs no permission check first; the call is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, and the tool also refuses `rm -rf`, `sudo` and `git push --force` outright, so a host with no rules configured is not left without a guard. The call is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
 
 **Per-agent enforcement**
 
-| Agent | edit | shell | everything else |
-|-------|------|-------|-----------------|
-| `agentWIPPA` | denied | denied | `subagent *` allowed |
-| `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied |
-| `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
-| `research-analyst`, `product-strategist` | allowed | deny all shell | no additional deny rules — read, web and MCP tools remain reachable |
+| Agent | edit | shell | verify | everything else |
+|-------|------|-------|--------|-----------------|
+| `agentWIPPA` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
+| `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied | `rm -rf *`, `sudo *` and `git push --force *` denied |
+| `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
+| `research-analyst`, `product-strategist` | allowed | deny all shell | deny all verify | no additional deny rules — read, web and MCP tools remain reachable |
 
 No rule restricts MCP reach per agent: every agent can reach the `github`, `context7` and `playwright` servers, and the scope of the GitHub token is the boundary for the `github` server.
 

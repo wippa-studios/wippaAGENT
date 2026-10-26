@@ -27,8 +27,19 @@ Four kinds of change are welcome.
      - action: shell
        resource: "sudo *"
        effect: deny
+     - action: verify
+       resource: "rm -rf *"
+       effect: deny
+     - action: verify
+       resource: "sudo *"
+       effect: deny
    ---
    ```
+
+   Every `shell` guard needs a matching `verify` guard. `wippa_verify` runs an
+   acceptance command through a shell, so an agent that denies `rm -rf *` to
+   `shell` and allows it to `verify` has denied nothing. An agent that denies all
+   shell, such as `research-analyst`, must deny all `verify` too.
 
    The `description` is the routing surface. It is read on every delegation, so it must say what the agent does and when it is the right one, not what the agent is.
 

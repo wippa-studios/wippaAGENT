@@ -12,6 +12,15 @@ permissions:
   - action: subagent
     resource: "*"
     effect: allow
+  - action: verify
+    resource: "rm -rf *"
+    effect: deny
+  - action: verify
+    resource: "sudo *"
+    effect: deny
+  - action: verify
+    resource: "git push --force *"
+    effect: deny
 ---
 
 # agentWIPPA

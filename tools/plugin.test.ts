@@ -21,16 +21,31 @@ interface FakeToolDefinition {
     required?: string[]
     additionalProperties?: boolean
   }
-  options?: { namespace?: string; codemode?: boolean }
+  options?: { namespace?: string; codemode?: boolean; permission?: string }
   execute(
     input: unknown,
-    context: { progress: (update: { status: string }) => Promise<void> },
+    context: {
+      sessionID: string
+      agent: string
+      messageID: string
+      id: string
+      signal: AbortSignal
+      progress: (update: { status: string }) => Promise<void>
+    },
   ): Promise<{ content: string }>
 }
 
 interface FakeEditor {
   namespace(namespace: { name: string; description?: string }): void
   add(tool: FakeToolDefinition): void
+}
+
+interface PermissionCall {
+  sessionID: string
+  agent?: string
+  action: string
+  resources: string[]
+  source?: { type: "tool"; messageID: string; id: string }
 }
 
 interface FakeContext {
@@ -40,6 +55,7 @@ interface FakeContext {
     set(key: string, value: unknown): Promise<void>
     remove(key: string): Promise<void>
   }
+  permission: { assert(input: PermissionCall): Promise<void> }
   tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
 }
 
@@ -49,12 +65,18 @@ interface FakeHost {
   context: FakeContext
   tools: FakeToolDefinition[]
   namespace(): { name: string; description?: string } | undefined
+  /** Every permission assertion the plugin made, in order. */
+  permissionCalls: PermissionCall[]
+  /** Set to reject the next assertion, the way a deny rule does. */
+  denyPermission(reason: string): void
 }
 
 function fakeHost(directory: string): FakeHost {
   const cache = new Map<string, unknown>()
   const tools: FakeToolDefinition[] = []
+  const permissionCalls: PermissionCall[] = []
   let namespace: { name: string; description?: string } | undefined
+  let denial: string | undefined
 
   const context: FakeContext = {
     location: { directory },
@@ -67,6 +89,16 @@ function fakeHost(directory: string): FakeHost {
       },
       async remove(key) {
         cache.delete(key)
+      },
+    },
+    permission: {
+      async assert(input) {
+        permissionCalls.push(input)
+        if (denial !== undefined) {
+          const error = new Error(denial)
+          error.name = "ToolError"
+          throw error
+        }
       },
     },
     tool: {
@@ -83,13 +115,28 @@ function fakeHost(directory: string): FakeHost {
     },
   }
 
-  return { context, tools, namespace: () => namespace }
+  return {
+    context,
+    tools,
+    namespace: () => namespace,
+    permissionCalls,
+    denyPermission(reason) {
+      denial = reason
+    },
+  }
 }
 
 async function runTool(host: FakeHost, name: string, input: unknown): Promise<string> {
   const tool = host.tools.find((entry) => entry.name === name)
   assert.ok(tool, `${name} is registered`)
-  const result = await tool.execute(input, { progress: async () => {} })
+  const result = await tool.execute(input, {
+    sessionID: "ses_test",
+    agent: "agentWIPPA",
+    messageID: "msg_test",
+    id: "call_test",
+    signal: new AbortController().signal,
+    progress: async () => {},
+  })
   return result.content
 }
 
@@ -141,7 +188,11 @@ test("setup registers the five wippa tools in the wippa namespace", async () => 
     ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify"],
   )
   for (const tool of host.tools) {
-    assert.deepEqual(tool.options, { namespace: "wippa", codemode: false })
+    const expected =
+      tool.name === "verify"
+        ? { namespace: "wippa", codemode: false, permission: "verify" }
+        : { namespace: "wippa", codemode: false }
+    assert.deepEqual(tool.options, expected)
     assert.equal(tool.input.type, "object")
     assert.ok(tool.description.length > 0, `${tool.name} carries a description`)
   }
@@ -313,6 +364,69 @@ test("verify passes timeoutMs through to the command", async () => {
   // 500 is raised to the 1000ms floor inside verify: far below the 5s the
   // command would take, and below the 300s default.
   assert.ok(elapsed >= 500 && elapsed < 3_000, `killed at ~1s rather than waited out (${elapsed}ms)`)
+})
+
+test("verify asks the session's permissions before it spawns anything", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "verify", { command: "echo permitted" })
+
+  assert.equal(host.permissionCalls.length, 1)
+  const call = host.permissionCalls[0]!
+  assert.equal(call.action, "verify")
+  assert.deepEqual(call.resources, ["echo permitted"])
+  assert.equal(call.sessionID, "ses_test")
+  assert.equal(call.agent, "agentWIPPA")
+  assert.deepEqual(call.source, { type: "tool", messageID: "msg_test", id: "call_test" })
+  assert.equal(JSON.parse(content).ok, true)
+})
+
+test("verify propagates a denied permission instead of running the command", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.denyPermission("denied by rule")
+  await setup(host.context)
+
+  await assert.rejects(
+    () => runTool(host, "verify", { command: "echo should-not-run" }),
+    /denied by rule/,
+  )
+})
+
+test("verify declares its own permission action and is the only tool that does", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const tool of host.tools) {
+    if (tool.name === "verify") assert.equal(tool.options?.permission, "verify")
+    else assert.equal(tool.options?.permission, undefined, `${tool.name} declares no permission`)
+  }
+
+  // A read-only tool must not ask for a shell-shaped permission.
+  await runTool(host, "subagent_list", {})
+  assert.equal(host.permissionCalls.length, 0)
+})
+
+test("verify refuses the literal shell patterns the agent set denies", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const command of ["rm -rf build", "sudo make install", "git push --force origin main"]) {
+    const result = JSON.parse(await runTool(host, "verify", { command }))
+    assert.equal(result.ok, false, command)
+    assert.equal(result.exitCode, -1)
+    assert.equal(result.reason, "denied-pattern")
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /denied pattern/)
+  }
+
+  // A command that merely mentions the words is not blocked.
+  const harmless = JSON.parse(await runTool(host, "verify", { command: "echo rm -rf sudo" }))
+  assert.equal(harmless.ok, true)
 })
 
 test("editing the roster invalidates the cached catalog", async () => {
