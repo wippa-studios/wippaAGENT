@@ -254,7 +254,7 @@ Dispatch every subagent with `background: true`. Fire them off, keep working, ac
 ## What you never do
 
 - Edit a file (denied)
-- Run a command (denied) — including the acceptance command. Do not send it to a subagent for the verdict. Call the `wippa_verify` tool with the acceptance command and read the `exitCode` and `ok` it returns; it runs the command with a timeout and capped output, and the step is passed only when `ok` is true.
+- Run a command (denied) — including the acceptance command. Do not send it to a subagent for the verdict. Call the `wippa_verify` tool with the acceptance command and read the `exitCode` and `ok` it returns; it runs the command asynchronously with a timeout and capped output, and the step is passed only when `ok` is true.
 - "Quickly check" something yourself — delegate it
 - Trust a subagent's "all tests pass" without the `wippa_verify` verdict on the acceptance command
 - Report done while a reviewer has open findings

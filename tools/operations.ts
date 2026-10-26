@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
 import { readFileSync, statSync } from "node:fs"
 import { resolve } from "node:path"
 
@@ -320,7 +320,7 @@ export interface VerifyResult {
   ok: boolean
   /**
    * Why the command produced no normal exit code: `invalid-command`,
-   * `denied-pattern`, `timeout`, `output-limit`, `spawn-error` or
+   * `denied-pattern`, `aborted`, `timeout`, `output-limit`, `spawn-error` or
    * `cwd-not-found`. Absent when the command ran to a verdict, including a
    * non-zero exit code, which is reported through `exitCode`.
    */
@@ -329,6 +329,8 @@ export interface VerifyResult {
   stderr: string
   /** The absolute working directory the command ran in. */
   cwd: string
+  /** Wall-clock time the command ran, in milliseconds; 0 when it never started. */
+  durationMs: number
 }
 
 /** Everything one acceptance-command run accepts. */
@@ -338,6 +340,8 @@ export interface VerifyOptions {
   timeoutMs?: number
   maxBuffer?: number
   outputLimit?: number
+  /** The caller's cancellation signal; aborting it kills the running command. */
+  signal?: AbortSignal
 }
 
 // An acceptance command can legitimately take minutes, so the default timeout
@@ -380,10 +384,20 @@ function truncateOutput(text: string, limit: number): string {
 /**
  * Runs an acceptance command through the shell and reports the real exit
  * code, so a pass/fail verdict never rests on subagent prose.
+ *
+ * The run is asynchronous on purpose. `spawnSync` held the whole process for
+ * the length of the command, so nothing else in the session could run, and an
+ * aborted call could not be stopped. This version spawns the command, watches
+ * the timeout, the output cap and the caller's signal, and resolves when the
+ * process exits or is killed.
  */
-export function verify(command: string | VerifyOptions, cwd?: string): VerifyResult {
+export async function verify(
+  command: string | VerifyOptions,
+  cwd?: string,
+): Promise<VerifyResult> {
   const options: VerifyOptions = typeof command === "string" ? { command, cwd } : command
   const target = options.command
+  const workingDir = options.cwd === undefined ? process.cwd() : resolve(options.cwd)
 
   const timeoutMs = clampOption(
     options.timeoutMs,
@@ -413,11 +427,11 @@ export function verify(command: string | VerifyOptions, cwd?: string): VerifyRes
       reason: "denied-pattern",
       stdout: "",
       stderr: `The acceptance command matches a denied pattern (${refused}). This tool runs a shell and does not bypass the shell rules the agent definitions ship.`,
-      cwd: options.cwd === undefined ? process.cwd() : resolve(options.cwd),
+      cwd: workingDir,
+      durationMs: 0,
     }
   }
 
-  const workingDir = options.cwd === undefined ? process.cwd() : resolve(options.cwd)
   if (!isDirectory(workingDir)) {
     return {
       command: target,
@@ -427,47 +441,132 @@ export function verify(command: string | VerifyOptions, cwd?: string): VerifyRes
       stdout: "",
       stderr: `The working directory does not exist or is not a directory: ${workingDir}`,
       cwd: workingDir,
+      durationMs: 0,
     }
   }
 
-  const result = spawnSync(target, {
-    shell: true,
-    encoding: "utf8",
-    cwd: workingDir,
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-    maxBuffer,
-  })
-
-  if (result.error) {
-    // Verified against Node 24: a timeout sets error.code to ETIMEDOUT, status
-    // to null and keeps the partial stdout/stderr of the killed process;
-    // exceeding maxBuffer sets ENOBUFS. Anything else, a missing code included,
-    // is a spawn failure and carries the error itself.
-    const code = (result.error as NodeJS.ErrnoException).code
-    const reason = code === "ETIMEDOUT" ? "timeout" : code === "ENOBUFS" ? "output-limit" : "spawn-error"
-    const stderr = result.stderr ?? ""
+  if (options.signal?.aborted) {
     return {
       command: target,
       exitCode: -1,
       ok: false,
-      reason,
-      stdout: truncateOutput(result.stdout ?? "", outputLimit),
-      stderr: truncateOutput(
-        reason === "spawn-error" ? [String(result.error), stderr].filter(Boolean).join("\n") : stderr,
-        outputLimit,
-      ),
+      reason: "aborted",
+      stdout: "",
+      stderr: "The call was cancelled before the command started.",
       cwd: workingDir,
+      durationMs: 0,
     }
   }
 
-  const exitCode = result.status ?? -1
-  return {
-    command: target,
-    exitCode,
-    ok: exitCode === 0,
-    stdout: truncateOutput(result.stdout ?? "", outputLimit),
-    stderr: truncateOutput(result.stderr ?? "", outputLimit),
-    cwd: workingDir,
-  }
+  return runCommand(target, workingDir, timeoutMs, maxBuffer, outputLimit, options.signal)
+}
+
+/**
+ * One spawned acceptance command. Output is kept as buffers and decoded once at
+ * the end, so a chunk that splits a multi-byte character is not mangled. The
+ * `maxBuffer` check is per stream, matching `child_process`'s documented
+ * behaviour; `outputLimit` is applied to the decoded text afterwards.
+ */
+function runCommand(
+  target: string,
+  workingDir: string,
+  timeoutMs: number,
+  maxBuffer: number,
+  outputLimit: number,
+  signal: AbortSignal | undefined,
+): Promise<VerifyResult> {
+  const startedAt = Date.now()
+
+  return new Promise((resolvePromise) => {
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let stdoutBytes = 0
+    let stderrBytes = 0
+    let reason: string | undefined
+    let spawnError: string | undefined
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+
+    const child = spawn(target, {
+      shell: true,
+      cwd: workingDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      // On POSIX the command leads its own process group, so a timeout or an
+      // abort kills the shell and everything it started. Without this, killing
+      // `sh` leaves a grandchild holding the output pipes open and the call
+      // still waits for it.
+      detached: process.platform !== "win32",
+    })
+
+    const finish = (exitCode: number): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener("abort", onAbort)
+      const failed = reason !== undefined
+      resolvePromise({
+        command: target,
+        exitCode: failed ? -1 : exitCode,
+        ok: !failed && exitCode === 0,
+        ...(reason === undefined ? {} : { reason }),
+        stdout: truncateOutput(Buffer.concat(stdout).toString("utf8"), outputLimit),
+        stderr: truncateOutput(
+          [spawnError, Buffer.concat(stderr).toString("utf8")].filter(Boolean).join("\n"),
+          outputLimit,
+        ),
+        cwd: workingDir,
+        durationMs: Date.now() - startedAt,
+      })
+    }
+
+    const killGroup = (): void => {
+      if (child.pid === undefined) return
+      if (process.platform === "win32") {
+        child.kill("SIGKILL")
+        return
+      }
+      try {
+        // The negated pid addresses the process group the detached child leads.
+        process.kill(-child.pid, "SIGKILL")
+      } catch {
+        // The group is already gone, which is the outcome this wanted.
+        child.kill("SIGKILL")
+      }
+    }
+
+    // The first stop condition wins: a command that timed out is reported as a
+    // timeout even if the kill makes it exit non-zero a moment later.
+    const stop = (next: string): void => {
+      if (reason === undefined) reason = next
+      killGroup()
+    }
+
+    const onAbort = (): void => stop("aborted")
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.push(chunk)
+      stdoutBytes += chunk.length
+      if (stdoutBytes > maxBuffer) stop("output-limit")
+    })
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr.push(chunk)
+      stderrBytes += chunk.length
+      if (stderrBytes > maxBuffer) stop("output-limit")
+    })
+
+    child.on("error", (error) => {
+      if (reason === undefined) reason = "spawn-error"
+      if (spawnError === undefined) spawnError = String(error)
+      finish(-1)
+    })
+
+    child.on("close", (code) => finish(code ?? -1))
+
+    timer = setTimeout(() => stop("timeout"), timeoutMs)
+    if (signal !== undefined) {
+      signal.addEventListener("abort", onAbort, { once: true })
+      // The signal may have aborted between the check in `verify` and here.
+      if (signal.aborted) onAbort()
+    }
+  })
 }

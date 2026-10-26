@@ -317,6 +317,7 @@ const plugin: PluginPlugin = {
               stdout: "",
               stderr: `command must be a non-empty string of at most ${COMMAND_MAX_LENGTH} characters`,
               cwd: location,
+              durationMs: 0,
             }
             return { content: JSON.stringify(failure) }
           }
@@ -334,13 +335,13 @@ const plugin: PluginPlugin = {
           // The default is the location directory, not the server process cwd,
           // and a relative cwd is resolved against it.
           const workingDir = typeof cwd === "string" && cwd.trim() ? resolve(location, cwd) : location
-          const options: VerifyOptions = { command, cwd: workingDir }
+          const options: VerifyOptions = { command, cwd: workingDir, signal: context.signal }
           // A non-finite value is not a timeout: the default applies instead.
           // The bounds clamp inside verify.
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             options.timeoutMs = timeoutMs
           }
-          const result = verify(options)
+          const result = await verify(options)
           return { content: JSON.stringify(result) }
         },
       })

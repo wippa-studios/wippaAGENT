@@ -365,7 +365,7 @@ The orchestrator reviews those fields rather than the prose around them. A missi
 
 ## Trust model
 
-Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, and the tool also refuses `rm -rf`, `sudo` and `git push --force` outright, so a host with no rules configured is not left without a guard. The call is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, and the tool also refuses `rm -rf`, `sudo` and `git push --force` outright, so a host with no rules configured is not left without a guard. The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
 
 **Per-agent enforcement**
 
@@ -411,7 +411,7 @@ The catalog is the roster: the twelve agents this bundle ships, plus any id list
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
-| `wippa_verify` | Did the acceptance command pass? Runs it in a shell with a timeout and capped output and returns the real exit code with stdout and stderr, so a pass/fail verdict never rests on prose. |
+| `wippa_verify` | Did the acceptance command pass? Runs it in a shell asynchronously, with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. |
 
 The `wippa-subagent-search` skill documents the four roster tools, explains which one to reach for, and gives the equivalent procedure using `read`, `glob` and `grep` when the plugin is not connected.
 

@@ -126,7 +126,12 @@ function fakeHost(directory: string): FakeHost {
   }
 }
 
-async function runTool(host: FakeHost, name: string, input: unknown): Promise<string> {
+async function runTool(
+  host: FakeHost,
+  name: string,
+  input: unknown,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<string> {
   const tool = host.tools.find((entry) => entry.name === name)
   assert.ok(tool, `${name} is registered`)
   const result = await tool.execute(input, {
@@ -134,7 +139,7 @@ async function runTool(host: FakeHost, name: string, input: unknown): Promise<st
     agent: "agentWIPPA",
     messageID: "msg_test",
     id: "call_test",
-    signal: new AbortController().signal,
+    signal,
     progress: async () => {},
   })
   return result.content
@@ -364,6 +369,21 @@ test("verify passes timeoutMs through to the command", async () => {
   // 500 is raised to the 1000ms floor inside verify: far below the 5s the
   // command would take, and below the 300s default.
   assert.ok(elapsed >= 500 && elapsed < 3_000, `killed at ~1s rather than waited out (${elapsed}ms)`)
+})
+
+test("verify forwards the call's abort signal to the running command", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 50)
+  const result = JSON.parse(
+    await runTool(host, "verify", { command: "sleep 5" }, controller.signal),
+  )
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "aborted")
 })
 
 test("verify asks the session's permissions before it spawns anything", async () => {

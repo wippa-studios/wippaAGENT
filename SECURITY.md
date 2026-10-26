@@ -20,12 +20,13 @@ tool asserts a `verify` permission action with the command as its resource
 before spawning anything, so a deny rule for `verify` stops it exactly as the
 same rule stops `shell`, and it refuses `rm -rf`, `sudo` and `git push --force`
 even where no rule is configured. It runs with the authority of the user running
-OpenCode: filesystem, processes, and network. The timeout kills the command's
-shell, but a command that starts background processes which hold the terminal
-open may still stall the call. Agent shell and edit rules, such as `rm -rf` or
-`sudo` denies, are literal-pattern guardrails, not a sandbox; the scope of
-`GITHUB_PERSONAL_ACCESS_TOKEN` limits only the `github` MCP server, so prefer a
-fine-grained token.
+OpenCode: filesystem, processes, and network. The call is asynchronous, so it
+does not block the session, and cancelling the call kills the command. On POSIX
+the timeout kills the command's process group; on Windows it kills the shell, so
+a background process that holds the output open may still stall the call. Agent
+shell and edit rules, such as `rm -rf` or `sudo` denies, are literal-pattern
+guardrails, not a sandbox; the scope of `GITHUB_PERSONAL_ACCESS_TOKEN` limits
+only the `github` MCP server, so prefer a fine-grained token.
 
 ## Response
 
