@@ -514,6 +514,17 @@ test("a project directory still indexes every file, roster or not", () => {
   assert.equal(catalog.agents[0]?.scope, "project")
 })
 
+test("the shipped bundle has no drift against its own roster", () => {
+  const roster = readRoster([CATEGORIES_DIR])
+  const catalog = buildCatalog([CATEGORIES_DIR], roster)
+
+  assert.deepEqual(describeDrift(catalog, roster), [], "roster, files and counts agree")
+  for (const agent of catalog.agents) {
+    assert.equal(agent.mode, "subagent", `${agent.id} is a subagent`)
+    assert.equal(agent.scope, "project", `${agent.id} comes from the bundle`)
+  }
+})
+
 test("describeDrift reports a deliberately mismatched roster", () => {
   const catalog = bundleCatalog()
   const mismatched: RosterCategory[] = [
