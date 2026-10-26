@@ -27,8 +27,19 @@ Four kinds of change are welcome.
      - action: shell
        resource: "sudo *"
        effect: deny
+     - action: verify
+       resource: "rm -rf *"
+       effect: deny
+     - action: verify
+       resource: "sudo *"
+       effect: deny
    ---
    ```
+
+   Every `shell` guard needs a matching `verify` guard. `wippa_verify` runs an
+   acceptance command through a shell, so an agent that denies `rm -rf *` to
+   `shell` and allows it to `verify` has denied nothing. An agent that denies all
+   shell, such as `research-analyst`, must deny all `verify` too.
 
    The `description` is the routing surface. It is read on every delegation, so it must say what the agent does and when it is the right one, not what the agent is.
 
@@ -47,6 +58,8 @@ Four kinds of change are welcome.
 ## Pull requests
 
 A pull request should say which category it touches and why that category is the right home for the change. Include what you ran, what it returned, and what you did not check. A pull request that changes the roster should also update the agent table in `README.md` so the two stay in step.
+
+A pull request that changes routing runs `npm run eval -- --check`, which checks that every scenario in `evals/scenarios/` still parses and names agents that exist. If the change adds a behaviour the set should keep, add a scenario for it and name the command that decides it.
 
 ## Licence
 

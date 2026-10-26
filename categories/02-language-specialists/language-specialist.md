@@ -9,6 +9,12 @@ permissions:
   - action: shell
     resource: "sudo *"
     effect: deny
+  - action: verify
+    resource: "rm -rf *"
+    effect: deny
+  - action: verify
+    resource: "sudo *"
+    effect: deny
 ---
 
 # Language Specialist

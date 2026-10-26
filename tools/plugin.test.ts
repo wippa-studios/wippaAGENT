@@ -21,10 +21,17 @@ interface FakeToolDefinition {
     required?: string[]
     additionalProperties?: boolean
   }
-  options?: { namespace?: string; codemode?: boolean }
+  options?: { namespace?: string; codemode?: boolean; permission?: string }
   execute(
     input: unknown,
-    context: { progress: (update: { status: string }) => Promise<void> },
+    context: {
+      sessionID: string
+      agent: string
+      messageID: string
+      id: string
+      signal: AbortSignal
+      progress: (update: { status: string }) => Promise<void>
+    },
   ): Promise<{ content: string }>
 }
 
@@ -33,14 +40,42 @@ interface FakeEditor {
   add(tool: FakeToolDefinition): void
 }
 
+interface PermissionCall {
+  sessionID: string
+  agent?: string
+  action: string
+  resources: string[]
+  source?: { type: "tool"; messageID: string; id: string }
+}
+
 interface FakeContext {
-  location: { directory: string }
+  location: { directory: string; project: { directory: string; canonical: string } }
   storage: {
     get(key: string): Promise<unknown>
     set(key: string, value: unknown): Promise<void>
     remove(key: string): Promise<void>
   }
+  permission: { assert(input: PermissionCall): Promise<void> }
+  vcs: { diff(input: VcsDiffCall, options?: { signal?: AbortSignal }): Promise<readonly DiffFile[]> }
   tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
+}
+
+interface VcsDiffCall {
+  directory: string
+  worktree: string
+  canonical: string
+  mode: string
+  base?: string
+  context: number
+  maxOutputBytes: number
+}
+
+interface DiffFile {
+  file: string
+  patch: string
+  additions: number
+  deletions: number
+  status: "added" | "deleted" | "modified"
 }
 
 const setup = plugin.setup as unknown as (context: FakeContext) => Promise<void> | void
@@ -49,15 +84,33 @@ interface FakeHost {
   context: FakeContext
   tools: FakeToolDefinition[]
   namespace(): { name: string; description?: string } | undefined
+  /** Every permission assertion the plugin made, in order. */
+  permissionCalls: PermissionCall[]
+  /** Set to reject the next assertion, the way a deny rule does. */
+  denyPermission(reason: string): void
+  /** Every `vcs.diff` call the plugin made, in order, with the signal it passed. */
+  diffCalls: (VcsDiffCall & { signal?: AbortSignal })[]
+  /** The files the fake VCS returns from a diff call. */
+  setDiffFiles(files: readonly DiffFile[]): void
+  /** Make diff calls reject, the way a failing git command does. */
+  failDiff(message: string): void
 }
 
-function fakeHost(directory: string): FakeHost {
+function fakeHost(
+  directory: string,
+  project: { directory: string; canonical: string } = { directory, canonical: directory },
+): FakeHost {
   const cache = new Map<string, unknown>()
   const tools: FakeToolDefinition[] = []
+  const permissionCalls: PermissionCall[] = []
+  const diffCalls: (VcsDiffCall & { signal?: AbortSignal })[] = []
   let namespace: { name: string; description?: string } | undefined
+  let denial: string | undefined
+  let diffFiles: readonly DiffFile[] = []
+  let diffError: Error | undefined
 
   const context: FakeContext = {
-    location: { directory },
+    location: { directory, project },
     storage: {
       async get(key) {
         return cache.get(key)
@@ -67,6 +120,23 @@ function fakeHost(directory: string): FakeHost {
       },
       async remove(key) {
         cache.delete(key)
+      },
+    },
+    permission: {
+      async assert(input) {
+        permissionCalls.push(input)
+        if (denial !== undefined) {
+          const error = new Error(denial)
+          error.name = "ToolError"
+          throw error
+        }
+      },
+    },
+    vcs: {
+      async diff(input, options) {
+        diffCalls.push({ ...input, signal: options?.signal })
+        if (diffError !== undefined) throw diffError
+        return diffFiles
       },
     },
     tool: {
@@ -83,13 +153,40 @@ function fakeHost(directory: string): FakeHost {
     },
   }
 
-  return { context, tools, namespace: () => namespace }
+  return {
+    context,
+    tools,
+    namespace: () => namespace,
+    permissionCalls,
+    denyPermission(reason) {
+      denial = reason
+    },
+    diffCalls,
+    setDiffFiles(files) {
+      diffFiles = files
+    },
+    failDiff(message) {
+      diffError = new Error(message)
+    },
+  }
 }
 
-async function runTool(host: FakeHost, name: string, input: unknown): Promise<string> {
+async function runTool(
+  host: FakeHost,
+  name: string,
+  input: unknown,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<string> {
   const tool = host.tools.find((entry) => entry.name === name)
   assert.ok(tool, `${name} is registered`)
-  const result = await tool.execute(input, { progress: async () => {} })
+  const result = await tool.execute(input, {
+    sessionID: "ses_test",
+    agent: "agentWIPPA",
+    messageID: "msg_test",
+    id: "call_test",
+    signal,
+    progress: async () => {},
+  })
   return result.content
 }
 
@@ -130,7 +227,7 @@ function probeFixture(rosterBeside = false): { root: string; agents: string; ros
 
 // ---------------------------------------------------------------- tests
 
-test("setup registers the five wippa tools in the wippa namespace", async () => {
+test("setup registers the six wippa tools in the wippa namespace", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -138,10 +235,14 @@ test("setup registers the five wippa tools in the wippa namespace", async () => 
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     host.tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify"],
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff"],
   )
   for (const tool of host.tools) {
-    assert.deepEqual(tool.options, { namespace: "wippa", codemode: false })
+    const expected =
+      tool.name === "verify"
+        ? { namespace: "wippa", codemode: false, permission: "verify" }
+        : { namespace: "wippa", codemode: false }
+    assert.deepEqual(tool.options, expected)
     assert.equal(tool.input.type, "object")
     assert.ok(tool.description.length > 0, `${tool.name} carries a description`)
   }
@@ -153,7 +254,7 @@ test("setup registers the five wippa tools in the wippa namespace", async () => 
   assert.equal(host.namespace()?.name, "wippa")
   assert.equal(
     host.namespace()?.description,
-    "Find, inspect and refresh the wippaAGENT subagent catalog, and run acceptance commands with a real exit code.",
+    "Find, inspect and refresh the wippaAGENT subagent catalog, run acceptance commands with a real exit code, and read diffs as structured files.",
   )
 })
 
@@ -313,6 +414,211 @@ test("verify passes timeoutMs through to the command", async () => {
   // 500 is raised to the 1000ms floor inside verify: far below the 5s the
   // command would take, and below the 300s default.
   assert.ok(elapsed >= 500 && elapsed < 3_000, `killed at ~1s rather than waited out (${elapsed}ms)`)
+})
+
+test("verify forwards the call's abort signal to the running command", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 50)
+  const result = JSON.parse(
+    await runTool(host, "verify", { command: "sleep 5" }, controller.signal),
+  )
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "aborted")
+})
+
+test("verify asks the session's permissions before it spawns anything", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "verify", { command: "echo permitted" })
+
+  assert.equal(host.permissionCalls.length, 1)
+  const call = host.permissionCalls[0]!
+  assert.equal(call.action, "verify")
+  assert.deepEqual(call.resources, ["echo permitted"])
+  assert.equal(call.sessionID, "ses_test")
+  assert.equal(call.agent, "agentWIPPA")
+  assert.deepEqual(call.source, { type: "tool", messageID: "msg_test", id: "call_test" })
+  assert.equal(JSON.parse(content).ok, true)
+})
+
+test("verify propagates a denied permission instead of running the command", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.denyPermission("denied by rule")
+  await setup(host.context)
+
+  await assert.rejects(
+    () => runTool(host, "verify", { command: "echo should-not-run" }),
+    /denied by rule/,
+  )
+})
+
+test("verify declares its own permission action and is the only tool that does", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const tool of host.tools) {
+    if (tool.name === "verify") assert.equal(tool.options?.permission, "verify")
+    else assert.equal(tool.options?.permission, undefined, `${tool.name} declares no permission`)
+  }
+
+  // A read-only tool must not ask for a shell-shaped permission.
+  await runTool(host, "subagent_list", {})
+  assert.equal(host.permissionCalls.length, 0)
+})
+
+test("verify refuses the literal shell patterns the agent set denies", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const command of ["rm -rf build", "sudo make install", "git push --force origin main"]) {
+    const result = JSON.parse(await runTool(host, "verify", { command }))
+    assert.equal(result.ok, false, command)
+    assert.equal(result.exitCode, -1)
+    assert.equal(result.reason, "denied-pattern")
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /denied pattern/)
+  }
+
+  // A command that merely mentions the words is not blocked.
+  const harmless = JSON.parse(await runTool(host, "verify", { command: "echo rm -rf sudo" }))
+  assert.equal(harmless.ok, true)
+})
+
+test("an unrelated agent in the global directory is not in the catalog", async () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = mkdtempSync(join(tmpdir(), "wippa-plugin-global-"))
+  const globalAgents = join(configDir, "agents")
+  mkdirSync(globalAgents, { recursive: true })
+  writeFileSync(
+    join(globalAgents, "foreign-auditor.md"),
+    probeAgent("An unrelated global agent installed for another project."),
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const { root } = probeFixture()
+    const host = fakeHost(root)
+    await setup(host.context)
+
+    const found = await runTool(host, "subagent_search", { query: "foreign-auditor" })
+    assert.match(found, /No agent matches "foreign-auditor"/)
+    assert.ok(!(await runTool(host, "subagent_list", {})).includes("foreign-auditor"))
+    assert.match(await runTool(host, "subagent_list", {}), /## Probe Group \(3\)/)
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("a custom global agent is in the catalog when it is listed in WIPPA_CUSTOM_AGENT_IDS", async () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousIds = process.env.WIPPA_CUSTOM_AGENT_IDS
+  const configDir = mkdtempSync(join(tmpdir(), "wippa-plugin-global-"))
+  const globalAgents = join(configDir, "agents")
+  mkdirSync(globalAgents, { recursive: true })
+  writeFileSync(
+    join(globalAgents, "custom-probe.md"),
+    probeAgent("A user-owned global agent."),
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  process.env.WIPPA_CUSTOM_AGENT_IDS = "custom-probe"
+  try {
+    const { root } = probeFixture()
+    const host = fakeHost(root)
+    await setup(host.context)
+
+    const found = await runTool(host, "subagent_search", { query: "custom-probe" })
+    assert.match(found, /custom-probe/)
+    assert.match(found, /A user-owned global agent\./)
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousIds === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previousIds
+  }
+})
+
+test("diff reads the working diff as structured files", async () => {
+  const { root } = probeFixture()
+  const worktree = join(root, "worktree")
+  const canonical = join(root, "canonical")
+  const host = fakeHost(root, { directory: worktree, canonical })
+  const files = [
+    { file: "src/a.ts", patch: "@@ -1 +1 @@\n-old\n+new\n", additions: 1, deletions: 1, status: "modified" as const },
+    { file: "src/b.ts", patch: "", additions: 4, deletions: 0, status: "added" as const },
+  ]
+  host.setDiffFiles(files)
+  await setup(host.context)
+
+  const controller = new AbortController()
+  const content = await runTool(host, "diff", {}, controller.signal)
+
+  assert.deepEqual(JSON.parse(content), files)
+  assert.equal(host.diffCalls.length, 1)
+  assert.deepEqual(host.diffCalls[0], {
+    directory: root,
+    worktree,
+    canonical,
+    mode: "working",
+    context: 3,
+    maxOutputBytes: 1_000_000,
+    signal: controller.signal,
+  })
+})
+
+test("diff passes the requested mode and base and clamps its bounds", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  await runTool(host, "diff", {
+    mode: "branch",
+    base: "origin/main",
+    context: 1_000,
+    maxOutputBytes: 1,
+  })
+
+  const call = host.diffCalls[0]!
+  assert.equal(call.mode, "branch")
+  assert.equal(call.base, "origin/main")
+  assert.equal(call.context, 100)
+  assert.equal(call.maxOutputBytes, 1_024)
+})
+
+test("diff refuses an unknown mode without asking the VCS", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "diff", { mode: "staged" })
+
+  assert.deepEqual(JSON.parse(content), {
+    error: "mode must be one of working, branch or committed",
+  })
+  assert.equal(host.diffCalls.length, 0)
+})
+
+test("diff reports a VCS failure as structured output instead of throwing", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.failDiff("not a git repository")
+  await setup(host.context)
+
+  const content = await runTool(host, "diff", { base: 42 })
+
+  assert.deepEqual(JSON.parse(content), { error: "not a git repository" })
+  assert.equal(host.diffCalls[0]?.base, undefined, "a non-string base is absent")
 })
 
 test("editing the roster invalidates the cached catalog", async () => {

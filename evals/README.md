@@ -25,3 +25,17 @@ A scenario carries six fields:
 ## Running a scenario
 
 A scenario is only useful if it stays executable. Keep the acceptance command tied to something that runs in the repository, such as the test suite in `package.json`, and keep the scenario's intent stable when the behaviour under test changes.
+
+`evals/run.ts` runs them.
+
+```bash
+npm run eval                  # validate, then run each acceptance command
+npm run eval -- --check       # validate only, run nothing
+npm run eval -- --timeout 60000
+```
+
+Every run parses each file and checks that the scenario name matches the file name, that all six fields are present, that the primary agent has a definition, and that every expected subagent is in the catalog with `mode: subagent`. A scenario with a problem fails the run before its command is considered. Identical acceptance commands are run once and shared, so two scenarios that both check `npm test` do not pay for it twice.
+
+A scenario whose acceptance command is `None` is validated and then reported as skipped: the runner cannot produce the written report that is the evidence. That is a pass for validation, not a pass for the behaviour under test, and the summary prints the skipped count separately.
+
+The runner exits 0 only when no scenario failed. `npm test` covers the parser and every shipped scenario, so a scenario that stops matching the catalog fails the test suite as well.

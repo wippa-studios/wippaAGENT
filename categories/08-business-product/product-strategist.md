@@ -12,6 +12,9 @@ permissions:
   - action: shell
     resource: "*"
     effect: deny
+  - action: verify
+    resource: "*"
+    effect: deny
 ---
 
 # Product Strategist

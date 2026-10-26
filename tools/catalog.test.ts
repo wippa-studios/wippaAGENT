@@ -25,7 +25,7 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
-import { get, invalid, list, search, verify } from "./operations.ts"
+import { deniedPattern, get, invalid, list, search, verify } from "./operations.ts"
 
 const BUNDLE_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const CATEGORIES_DIR = join(BUNDLE_ROOT, "categories")
@@ -407,6 +407,124 @@ test("scanFingerprint follows the scope precedence of the catalog", () => {
   }
 })
 
+test("a global directory contributes only the agents the roster names", () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "core-developer.md"),
+    "---\ndescription: global core developer\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(globalDir, "foreign-auditor.md"),
+    "---\ndescription: an unrelated global agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const roster: RosterCategory[] = [
+      { name: "Core Development", count: 1, agents: ["core-developer"] },
+    ]
+    const catalog = buildCatalog([globalDir], roster)
+
+    assert.deepEqual(
+      catalog.agents.map((entry) => entry.id),
+      ["core-developer"],
+      "the unrelated global agent is not indexed",
+    )
+    assert.equal(catalog.agents[0]?.scope, "global")
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("WIPPA_CUSTOM_AGENT_IDS adds a listed global agent to the catalog", () => {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousIds = process.env.WIPPA_CUSTOM_AGENT_IDS
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "claim-skeptic.md"),
+    "---\ndescription: a user-owned global agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  process.env.WIPPA_CUSTOM_AGENT_IDS = "claim-skeptic"
+  try {
+    const roster: RosterCategory[] = [{ name: "Core Development", count: 1, agents: ["core-developer"] }]
+    const catalog = buildCatalog([globalDir], roster)
+
+    assert.deepEqual(catalog.agents.map((entry) => entry.id), ["claim-skeptic"])
+    assert.equal(catalog.agents[0]?.category, undefined, "a custom agent carries no roster category")
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousIds === undefined) delete process.env.WIPPA_CUSTOM_AGENT_IDS
+    else process.env.WIPPA_CUSTOM_AGENT_IDS = previousIds
+  }
+})
+
+test("scanFingerprint ignores a foreign file in the global directory", () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = tempDir()
+  const globalDir = join(configDir, "agents")
+  mkdirSync(globalDir, { recursive: true })
+  writeFileSync(
+    join(globalDir, "core-developer.md"),
+    "---\ndescription: global core developer\nmode: subagent\n---\n\nbody\n",
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const roster: RosterCategory[] = [
+      { name: "Core Development", count: 1, agents: ["core-developer"] },
+    ]
+    const before = scanFingerprint([globalDir], roster)
+    writeFileSync(
+      join(globalDir, "foreign-auditor.md"),
+      "---\ndescription: an unrelated global agent\nmode: subagent\n---\n\nbody\n",
+    )
+
+    assert.equal(scanFingerprint([globalDir], roster), before, "the foreign file is not indexed")
+    assert.equal(
+      scanFingerprint([globalDir], roster),
+      fingerprint(buildCatalog([globalDir], roster)),
+      "the scan and the build agree on what is indexed",
+    )
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("a project directory still indexes every file, roster or not", () => {
+  const projectDir = tempDir()
+  writeFileSync(
+    join(projectDir, "team-agent.md"),
+    "---\ndescription: a project-local agent\nmode: subagent\n---\n\nbody\n",
+  )
+
+  const roster: RosterCategory[] = [{ name: "Core Development", count: 1, agents: ["core-developer"] }]
+  const catalog = buildCatalog([projectDir], roster)
+
+  assert.deepEqual(catalog.agents.map((entry) => entry.id), ["team-agent"])
+  assert.equal(catalog.agents[0]?.scope, "project")
+})
+
+test("the shipped bundle has no drift against its own roster", () => {
+  const roster = readRoster([CATEGORIES_DIR])
+  const catalog = buildCatalog([CATEGORIES_DIR], roster)
+
+  assert.deepEqual(describeDrift(catalog, roster), [], "roster, files and counts agree")
+  for (const agent of catalog.agents) {
+    assert.equal(agent.mode, "subagent", `${agent.id} is a subagent`)
+    assert.equal(agent.scope, "project", `${agent.id} comes from the bundle`)
+  }
+})
+
 test("describeDrift reports a deliberately mismatched roster", () => {
   const catalog = bundleCatalog()
   const mismatched: RosterCategory[] = [
@@ -632,32 +750,66 @@ test("invalid reports the refresh, the counts and the drift", () => {
   assert.match(output, /Drift against the roster/)
 })
 
-test("verify marks a passing acceptance command as ok", () => {
-  const result = verify("echo wippa-verify-passed")
+test("deniedPattern names the shell rules the agent set ships", () => {
+  assert.equal(deniedPattern("rm -rf build"), "rm -rf *")
+  assert.equal(deniedPattern("rm -rf /"), "rm -rf *")
+  assert.equal(deniedPattern("sudo apt-get install x"), "sudo *")
+  assert.equal(deniedPattern("git push --force origin main"), "git push --force *")
+  assert.equal(deniedPattern("npm test && sudo make install"), "sudo *")
+})
+
+test("deniedPattern leaves ordinary commands alone", () => {
+  for (const command of [
+    "npm test",
+    "echo rm -rf sudo",
+    "git push origin main",
+    "rm -f build/output.js",
+    "pnpm --filter web run build",
+  ]) {
+    assert.equal(deniedPattern(command), undefined, command)
+  }
+})
+
+test("verify refuses a denied pattern and never spawns the command", async () => {
+  const dir = tempDir()
+  const marker = join(dir, "marker.txt")
+  writeFileSync(marker, "untouched\n")
+
+  const result = await verify({ command: "rm -rf *", cwd: dir })
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "denied-pattern")
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /rm -rf \*/)
+  assert.equal(readFileSync(marker, "utf8"), "untouched\n", "nothing ran")
+})
+
+test("verify marks a passing acceptance command as ok", async () => {
+  const result = await verify("echo wippa-verify-passed")
 
   assert.equal(result.exitCode, 0)
   assert.equal(result.ok, true)
   assert.ok(result.stdout.includes("wippa-verify-passed"))
 })
 
-test("verify marks a failing acceptance command as not ok and keeps its real exit code", () => {
-  const result = verify("exit 3")
+test("verify marks a failing acceptance command as not ok and keeps its real exit code", async () => {
+  const result = await verify("exit 3")
 
   assert.equal(result.exitCode, 3)
   assert.equal(result.ok, false)
 })
 
-test("verify captures the output of the acceptance command", () => {
-  const result = verify("echo wippa-verify-stderr-out >&2; exit 0")
+test("verify captures the output of the acceptance command", async () => {
+  const result = await verify("echo wippa-verify-stderr-out >&2; exit 0")
 
   assert.equal(result.exitCode, 0)
   assert.equal(result.ok, true)
   assert.ok(result.stderr.includes("wippa-verify-stderr-out"))
 })
 
-test("verify reports a timeout instead of waiting for the command", () => {
+test("verify reports a timeout instead of waiting for the command", async () => {
   const started = Date.now()
-  const result = verify({ command: "sleep 5", timeoutMs: 1_000 })
+  const result = await verify({ command: "sleep 5", timeoutMs: 1_000 })
   const elapsed = Date.now() - started
 
   assert.equal(result.ok, false)
@@ -667,8 +819,57 @@ test("verify reports a timeout instead of waiting for the command", () => {
   assert.equal(result.cwd, process.cwd())
 })
 
-test("verify truncates a large stream keeping the head and the tail", () => {
-  const result = verify({ command: "seq 1 20000", outputLimit: 4_096 })
+test("verify does not block the event loop while the command runs", async () => {
+  let ticks = 0
+  const timer = setInterval(() => {
+    ticks += 1
+  }, 10)
+  try {
+    const result = await verify({ command: "sleep 0.3" })
+    assert.equal(result.ok, true)
+    assert.ok(ticks >= 5, `timers kept running during the command (${ticks} ticks)`)
+  } finally {
+    clearInterval(timer)
+  }
+})
+
+test("verify stops a running command when its signal aborts", async () => {
+  const controller = new AbortController()
+  const started = Date.now()
+  setTimeout(() => controller.abort(), 50)
+
+  const result = await verify({ command: "sleep 5", signal: controller.signal })
+  const elapsed = Date.now() - started
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "aborted")
+  assert.ok(elapsed < 3_000, `the command was killed rather than waited out (${elapsed}ms)`)
+})
+
+test("verify does not start a command when the signal is already aborted", async () => {
+  const dir = tempDir()
+  const controller = new AbortController()
+  controller.abort()
+
+  const result = await verify({ command: `touch ${join(dir, "ran.txt")}`, signal: controller.signal })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, "aborted")
+  assert.equal(result.durationMs, 0)
+  assert.deepEqual(readdirSync(dir), [], "nothing ran")
+})
+
+test("verify reports how long the command ran", async () => {
+  const result = await verify({ command: "sleep 0.2" })
+
+  assert.equal(result.ok, true)
+  assert.ok(result.durationMs >= 150, `the duration covers the run (${result.durationMs}ms)`)
+  assert.ok(result.durationMs < 5_000, `the duration is not inflated (${result.durationMs}ms)`)
+})
+
+test("verify truncates a large stream keeping the head and the tail", async () => {
+  const result = await verify({ command: "seq 1 20000", outputLimit: 4_096 })
 
   assert.equal(result.exitCode, 0)
   assert.equal(result.ok, true)
@@ -678,28 +879,28 @@ test("verify truncates a large stream keeping the head and the tail", () => {
   assert.ok(result.stdout.trimEnd().endsWith("20000"), "the tail of the output is kept")
 })
 
-test("verify truncates stderr too", () => {
-  const result = verify({ command: "seq 1 20000 >&2", outputLimit: 4_096 })
+test("verify truncates stderr too", async () => {
+  const result = await verify({ command: "seq 1 20000 >&2", outputLimit: 4_096 })
 
   assert.equal(result.exitCode, 0)
   assert.ok(result.stderr.includes("[truncated: kept first 2048 and last 2048 of"))
   assert.ok(result.stderr.length < 6_000)
 })
 
-test("verify reports an output limit when maxBuffer is exceeded", () => {
-  const result = verify({ command: "seq 1 100000", maxBuffer: 1_024 })
+test("verify reports an output limit when maxBuffer is exceeded", async () => {
+  const result = await verify({ command: "seq 1 100000", maxBuffer: 1_024 })
 
   assert.equal(result.ok, false)
   assert.equal(result.exitCode, -1)
   assert.equal(result.reason, "output-limit")
 
-  const truncated = verify({ command: "seq 1 100000", maxBuffer: 1_024, outputLimit: 256 })
+  const truncated = await verify({ command: "seq 1 100000", maxBuffer: 1_024, outputLimit: 256 })
   assert.ok(truncated.stdout.includes("[truncated: kept first 128 and last 128 of"))
 })
 
-test("verify reports a working directory that does not exist", () => {
+test("verify reports a working directory that does not exist", async () => {
   const missing = join(tempDir(), "does-not-exist")
-  const result = verify({ command: "echo hi", cwd: missing })
+  const result = await verify({ command: "echo hi", cwd: missing })
 
   assert.equal(result.ok, false)
   assert.equal(result.exitCode, -1)
@@ -709,17 +910,17 @@ test("verify reports a working directory that does not exist", () => {
   assert.equal(result.cwd, missing)
 })
 
-test("verify runs in the requested directory and records it as absolute", () => {
+test("verify runs in the requested directory and records it as absolute", async () => {
   const dir = tempDir()
   writeFileSync(join(dir, "marker.txt"), "wippa-cwd-marker\n")
 
-  const result = verify("cat marker.txt", dir)
+  const result = await verify("cat marker.txt", dir)
   assert.equal(result.exitCode, 0)
   assert.equal(result.ok, true)
   assert.ok(result.stdout.includes("wippa-cwd-marker"))
   assert.equal(result.cwd, dir)
 
-  const relative = verify("pwd", ".")
+  const relative = await verify("pwd", ".")
   assert.equal(relative.cwd, process.cwd())
 })
 

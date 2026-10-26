@@ -15,6 +15,18 @@ permissions:
   - action: shell
     resource: "npm install *"
     effect: ask
+  - action: verify
+    resource: "rm -rf *"
+    effect: ask
+  - action: verify
+    resource: "sudo *"
+    effect: deny
+  - action: verify
+    resource: "git push --force *"
+    effect: ask
+  - action: verify
+    resource: "npm install *"
+    effect: ask
 ---
 
 # Orchestration Lead

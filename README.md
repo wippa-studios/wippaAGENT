@@ -16,7 +16,7 @@ Install once, point the config at the orchestrator, and every project gets the s
 [![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
-![Tools](https://img.shields.io/badge/tools-5-f59e0b?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-6-f59e0b?style=for-the-badge)
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 
 [**Quick Start**](#quick-start) &nbsp;·&nbsp;
@@ -200,7 +200,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | `--dry-run` | Print every planned action and write nothing. |
 | `--force` | Overwrite files that already exist. |
 | `--uninstall` | Remove the agent files, the skill and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
-| `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. |
+| `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. JSONC comments and trailing commas are accepted, and the config is validated before anything is copied. |
 | `--help` | Print the usage text. |
 
 ### Requirements
@@ -365,19 +365,19 @@ The orchestrator reviews those fields rather than the prose around them. A missi
 
 ## Trust model
 
-Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced, and the one deliberate exception is `wippa_verify`, which runs the command you give it — no rule in this setup denies it, and the plugin performs no permission check first; the call is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, and the tool also refuses `rm -rf`, `sudo` and `git push --force` outright, so a host with no rules configured is not left without a guard. The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
 
 **Per-agent enforcement**
 
-| Agent | edit | shell | everything else |
-|-------|------|-------|-----------------|
-| `agentWIPPA` | denied | denied | `subagent *` allowed |
-| `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied |
-| `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied |
-| `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
-| `research-analyst`, `product-strategist` | allowed | deny all shell | no additional deny rules — read, web and MCP tools remain reachable |
+| Agent | edit | shell | verify | everything else |
+|-------|------|-------|--------|-----------------|
+| `agentWIPPA` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
+| `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied | `rm -rf *`, `sudo *` and `git push --force *` denied |
+| `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
+| `research-analyst`, `product-strategist` | allowed | deny all shell | deny all verify | no additional deny rules — read, web and MCP tools remain reachable |
 
 No rule restricts MCP reach per agent: every agent can reach the `github`, `context7` and `playwright` servers, and the scope of the GitHub token is the boundary for the `github` server.
 
@@ -401,7 +401,9 @@ The GitHub server expects `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment. The
 
 ## The tools
 
-The bundled plugin adds five tools: four for finding and reading the roster, and one for checking work.
+The bundled plugin adds six tools: four for finding and reading the roster, one for checking work, and one for reading a diff.
+
+The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override, and the bundle's own tree are indexed in full.
 
 | Tool | Question it answers |
 |------|---------------------|
@@ -409,7 +411,8 @@ The bundled plugin adds five tools: four for finding and reading the roster, and
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
-| `wippa_verify` | Did the acceptance command pass? Runs it in a shell with a timeout and capped output and returns the real exit code with stdout and stderr, so a pass/fail verdict never rests on prose. |
+| `wippa_verify` | Did the acceptance command pass? Runs it in a shell asynchronously, with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. |
+| `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries with the patch, additions, deletions and status, so the orchestrator can read the diff itself without a shell. |
 
 The `wippa-subagent-search` skill documents the four roster tools, explains which one to reach for, and gives the equivalent procedure using `read`, `glob` and `grep` when the plugin is not connected.
 
@@ -430,7 +433,7 @@ The agent set is inert until `default_agent` points at the orchestrator. Add it 
 }
 ```
 
-The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept.
+The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept. The target may be JSON or JSONC — comments and trailing commas are accepted — and it is validated before the first file is copied, so a config that cannot be parsed leaves nothing half-installed. When a key has to be added the file is rewritten as plain JSON, so comments are not preserved in that case; when every key is already present the file is left byte-identical.
 
 <details>
 <summary><b>What each key does</b></summary>
@@ -459,7 +462,7 @@ The skill and the tools plugin need no configuration entry. They are installed i
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | The `github` MCP server |
 | `WIPPA_AGENT_REGISTRY` | See `env.example` |
 | `WIPPA_AGENT_DIR` | See `env.example` |
-| `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration; exempt from roster drift reporting. Used by the tools plugin. |
+| `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration. They are indexed alongside the roster and are exempt from roster drift reporting. Used by the tools plugin. |
 
 > [!WARNING]
 > `opencode debug config` resolves and prints the value of `GITHUB_PERSONAL_ACCESS_TOKEN` in clear text. Treat that output as a secret, and do not paste it into an issue or a chat.
