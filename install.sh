@@ -50,7 +50,8 @@ Options:
   --uninstall         Remove the agent files, the skill and the plugin this
                       installer placed in the target
   --apply-config      Merge the required keys into the target opencode.json
-                      without changing values that are already set
+                      (JSON or JSONC) without changing values that are already
+                      set; validate it before copying anything
   -h, --help          Print this help and exit
 
 Examples:
@@ -352,24 +353,80 @@ print_config_keys() {
 JSON
 }
 
-apply_config() {
-  if ! command -v node >/dev/null 2>&1; then
-    err "node is required for --apply-config"
-    exit 1
-  fi
+# Parse the target config the way OpenCode does: JSON, plus the comments and
+# trailing commas that opencode.json is allowed to contain. Prints nothing on
+# success; the merge mode then writes the required keys.
+config_script() {
+  local mode="$1"
 
-  if [ "$DRY_RUN" -eq 1 ]; then
-    printf '  would merge the required keys into %s\n' "$CONFIG_FILE"
-    return 0
-  fi
-
-  mkdir -p "$TARGET_DIR"
-
-  node --input-type=module - "$CONFIG_FILE" <<'NODE'
+  node --input-type=module - "$CONFIG_FILE" "$mode" <<'NODE'
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
 const configPath = process.argv[2];
+const mode = process.argv[3];
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Strips // and /* */ comments and a trailing comma before a closing brace or
+// bracket, while leaving any such sequence inside a string untouched. URLs in
+// the config contain //, so a naive strip would corrupt them.
+function parseJsonc(raw) {
+  const text = raw.replace(/^\uFEFF/, '');
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (lineComment) {
+      if (char === '\n') {
+        lineComment = false;
+        out += char;
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        i += 1;
+      }
+      continue;
+    }
+    if (inString) {
+      out += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      out += char;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      i += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      i += 1;
+      continue;
+    }
+    out += char;
+  }
+
+  return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
 const added = [];
 const kept = [];
 
@@ -378,12 +435,34 @@ if (fs.existsSync(configPath)) {
   const raw = fs.readFileSync(configPath, 'utf8');
   if (raw.trim().length > 0) {
     try {
-      config = JSON.parse(raw);
+      config = JSON.parse(parseJsonc(raw));
     } catch (error) {
-      console.error(`error: ${configPath} is not valid JSON: ${error.message}`);
+      console.error(`error: ${configPath} is not valid JSON or JSONC: ${error.message}`);
       process.exit(1);
     }
   }
+}
+
+if (!isPlainObject(config)) {
+  console.error(`error: ${configPath} does not contain a JSON object`);
+  process.exit(1);
+}
+
+// A container the merge would write into must already be an object. Silently
+// replacing a string or an array would discard whatever the user meant by it.
+for (const [key, value] of [
+  ['agents', config.agents],
+  ['mcp', config.mcp],
+  ['mcp.servers', isPlainObject(config.mcp) ? config.mcp.servers : undefined],
+]) {
+  if (value !== undefined && !isPlainObject(value)) {
+    console.error(`error: ${configPath} has a "${key}" value that is not an object`);
+    process.exit(1);
+  }
+}
+
+if (mode === 'validate') {
+  process.exit(0);
 }
 
 function put(container, key, value, label) {
@@ -395,14 +474,9 @@ function put(container, key, value, label) {
   added.push(label);
 }
 
-if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-  console.error(`error: ${configPath} does not contain a JSON object`);
-  process.exit(1);
-}
-
 put(config, 'default_agent', 'agentWIPPA', 'default_agent');
 
-if (!Object.prototype.hasOwnProperty.call(config, 'agents') || typeof config.agents !== 'object' || config.agents === null) {
+if (!Object.prototype.hasOwnProperty.call(config, 'agents') || config.agents === null) {
   config.agents = {};
 }
 put(config.agents, 'general', { disabled: true }, 'agents.general');
@@ -415,10 +489,10 @@ put(config.agents, 'build', {
   ],
 }, 'agents.build');
 
-if (!Object.prototype.hasOwnProperty.call(config, 'mcp') || typeof config.mcp !== 'object' || config.mcp === null) {
+if (!Object.prototype.hasOwnProperty.call(config, 'mcp') || config.mcp === null) {
   config.mcp = {};
 }
-if (!Object.prototype.hasOwnProperty.call(config.mcp, 'servers') || typeof config.mcp.servers !== 'object' || config.mcp.servers === null) {
+if (!Object.prototype.hasOwnProperty.call(config.mcp, 'servers') || config.mcp.servers === null) {
   config.mcp.servers = {};
 }
 const servers = config.mcp.servers;
@@ -440,6 +514,15 @@ put(servers, 'playwright', {
   type: 'local',
   command: ['npx', '--yes', '@playwright/mcp@0.0.83', '--isolated'],
 }, 'mcp.servers.playwright');
+
+// Every key is already present, so the file needs no change. Skipping the write
+// keeps the user's comments, formatting and trailing commas intact.
+if (added.length === 0) {
+  for (const label of kept) {
+    console.log(`  kept       ${label} (already present)`);
+  }
+  process.exit(0);
+}
 
 // No "skills" or "plugins" key is written here. The skill is installed into
 // <scope>/skills/ and the tools plugin into <scope>/plugins/, and both of
@@ -496,6 +579,27 @@ for (const label of kept) {
   console.log(`  kept       ${label} (already present)`);
 }
 NODE
+}
+
+# Fail before anything is copied when --apply-config was asked for and the
+# target config cannot be parsed or has the wrong shape. A failed merge used to
+# leave thirteen agent files behind, so a second run then skipped them.
+validate_config() {
+  if ! command -v node >/dev/null 2>&1; then
+    err "node is required for --apply-config"
+    exit 1
+  fi
+  config_script validate
+}
+
+apply_config() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '  would merge the required keys into %s\n' "$CONFIG_FILE"
+    return 0
+  fi
+
+  mkdir -p "$TARGET_DIR"
+  config_script merge
 }
 
 # --------------------------------------------------------------- uninstall
@@ -580,6 +684,12 @@ say "source   : $SCRIPT_DIR"
 say "target   : $TARGET_DIR"
 say "scope    : $SCOPE"
 [ "$DRY_RUN" -eq 1 ] && say "dry run  : yes, nothing will be written"
+
+# Validate before step 1 copies anything, so an unparseable config cannot leave
+# a half-installed scope behind.
+if [ "$APPLY_CONFIG" -eq 1 ]; then
+  validate_config
+fi
 
 step "1. Agents ($AGENT_TOTAL)"
 AGENTS_BEFORE=$INSTALLED_FILES

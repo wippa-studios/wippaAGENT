@@ -200,7 +200,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | `--dry-run` | Print every planned action and write nothing. |
 | `--force` | Overwrite files that already exist. |
 | `--uninstall` | Remove the agent files, the skill and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
-| `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. |
+| `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. JSONC comments and trailing commas are accepted, and the config is validated before anything is copied. |
 | `--help` | Print the usage text. |
 
 ### Requirements
@@ -433,7 +433,7 @@ The agent set is inert until `default_agent` points at the orchestrator. Add it 
 }
 ```
 
-The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept.
+The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept. The target may be JSON or JSONC — comments and trailing commas are accepted — and it is validated before the first file is copied, so a config that cannot be parsed leaves nothing half-installed. When a key has to be added the file is rewritten as plain JSON, so comments are not preserved in that case; when every key is already present the file is left byte-identical.
 
 <details>
 <summary><b>What each key does</b></summary>
