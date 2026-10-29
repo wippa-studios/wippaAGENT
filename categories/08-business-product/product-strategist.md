@@ -270,7 +270,6 @@ Created with **wippaAGENT** by **wippa studios**.
 - Identify the output the product produces that reaches a new user, then draw the loop with a metric on every step: output, touchpoint, arrival, activation, back to the start.
 - Find the weakest step and put the effort there. A low viral coefficient means the sharing mechanism is broken, not the onboarding.
 - Track the viral coefficient and the cycle time. A coefficient near one with a long cycle time does not compound.
-- Gate paid reinvestment on the economics: a lifetime value to acquisition cost ratio above three and a payback period inside a year, or the loop is a treadmill.
 
 **What to watch for**
 
