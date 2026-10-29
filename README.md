@@ -366,7 +366,9 @@ The orchestrator reviews those fields rather than the prose around them. A missi
 
 ## Trust model
 
-Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, and the tool also refuses `rm -rf`, `sudo` and `git push --force` outright, so a host with no rules configured is not left without a guard. The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's edit and shell deny is enforced. The one deliberate exception is `wippa_verify`, which runs the command you give it, and it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, so the same rule list that governs `shell` governs it. On top of that assertion sits a tokenizing guard that runs before the permission check and before any spawn: it refuses command substitution, expansion, redirection, pipes, statement separators and line breaks anywhere in the command, allows only `&&` chains, scans every word of every segment — flat, in argument position, and inside quotes — against a denylist of shell interpreters with `-c`, the `sudo` and `rm` families, network and archive tools, mutating `git` subcommands, package install/publish/exec subcommands, file mutators, `awk` and `xargs`, denies interpreter-plus-eval-flag pairs such as `python -c`, `node -e` and `sed -i`, and runs `install.sh` only with `--dry-run`, so the tool cannot be used to write files past the orchestrator's edit deny. Read-only commands and test runners pass: `npm test`, `npm run …`, `npx`, `git ls-remote`/`log`/`fetch`/`diff`/`show`, `grep`, `cat`, `bash -n`, `shellcheck`. The shipped frontmatter repeats the shell guards as `verify` rules, so a host with no rules configured is still not left without a guard. The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. Treat an acceptance command as you would any shell command.
+
+`wippa_diff` validates its `base` before it reaches git: absolute paths, `..` traversal, option-like prefixes, and shell-significant characters are refused with a stated error rather than passed through, so the diff tool cannot be used to aim git at an arbitrary path.
 
 **Per-agent enforcement**
 
@@ -374,17 +376,17 @@ Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's e
 |-------|------|-------|--------|-----------------|
 | `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
 | `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
-| `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
+| `quality-auditor` | denied | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied | `rm -rf *`, `sudo *` and `git push --force *` denied |
 | `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
 | `research-analyst`, `product-strategist` | allowed | deny all shell | deny all verify | no additional deny rules — read, web and MCP tools remain reachable |
 
-No rule restricts MCP reach per agent: every agent can reach the `github`, `context7` and `playwright` servers, and the scope of the GitHub token is the boundary for the `github` server.
+No rule restricts MCP reach per agent: every agent can reach the `github`, `context7` and `playwright` servers. Two boundaries stand in instead. The `github` server is registered with the `repos`, `issues`, `pull_requests` and `actions` toolsets only — the repositories, issues and pull requests, review comments, CI status and releases the roster routes through `orchestration-lead` — so toolsets this workflow never uses are not even registered. And the scope of `GITHUB_PERSONAL_ACCESS_TOKEN` is the real limit on what the `github` server can reach: a fine-grained token scoped to one repository, carrying only the Issues, Pull requests, Contents and Actions permissions.
 
 Subagents cannot start further subagents (`experimental.subagent_depth` is 1).
 
-Routing — which agent owns what — and the "report only to me" line in every brief are prompt-level conventions, not permissions. The enforcement story is the table above plus the scope of `GITHUB_PERSONAL_ACCESS_TOKEN`: a fine-grained token is the real limit on what the `github` server can reach.
+Routing — which agent owns what — and the "report only to me" line in every brief are prompt-level conventions, not permissions. The enforcement story is the table above plus the narrowed `github` toolsets and the scope of `GITHUB_PERSONAL_ACCESS_TOKEN`: a fine-grained token is the real limit on what the `github` server can reach.
 
 <br/>
 
@@ -412,8 +414,8 @@ The catalog is the roster: the twelve agents this bundle ships, plus any id list
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
-| `wippa_verify` | Did the acceptance command pass? Runs it in a shell asynchronously, with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. |
-| `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries with the patch, additions, deletions and status, so the orchestrator can read the diff itself without a shell. |
+| `wippa_verify` | Did the acceptance command pass? Runs it in a shell asynchronously, with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. A command with substitution, redirection, pipes, separators, dangerous commands or eval-flag pairs never runs: the guard refuses it before the permission check and before any spawn, with the reason in the result. |
+| `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries with the patch, additions and deletions and status, so the orchestrator can read the diff itself without a shell. The `base` ref is validated first: absolute paths, `..` traversal and option-like input are refused with a stated error. |
 
 The `wippa-subagent-search` skill documents the four roster tools, explains which one to reach for, and gives the equivalent procedure using `read`, `glob` and `grep` when the plugin is not connected.
 
