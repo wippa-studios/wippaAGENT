@@ -331,7 +331,7 @@ print_config_keys() {
         "oauth": false,
         "headers": {
           "Authorization": "Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}",
-          "X-MCP-Toolsets": "context,repos,issues,pull_requests,actions,code_security,notifications"
+          "X-MCP-Toolsets": "repos,issues,pull_requests,actions"
         }
       },
       "context7": {
@@ -503,7 +503,7 @@ put(servers, 'github', {
   oauth: false,
   headers: {
     Authorization: 'Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}',
-    'X-MCP-Toolsets': 'context,repos,issues,pull_requests,actions,code_security,notifications',
+    'X-MCP-Toolsets': 'repos,issues,pull_requests,actions',
   },
 }, 'mcp.servers.github');
 put(servers, 'context7', {

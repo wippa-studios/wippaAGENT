@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -750,21 +751,24 @@ test("invalid reports the refresh, the counts and the drift", () => {
   assert.match(output, /Drift against the roster/)
 })
 
-test("deniedPattern names the shell rules the agent set ships", () => {
-  assert.equal(deniedPattern("rm -rf build"), "rm -rf *")
-  assert.equal(deniedPattern("rm -rf /"), "rm -rf *")
-  assert.equal(deniedPattern("sudo apt-get install x"), "sudo *")
-  assert.equal(deniedPattern("git push --force origin main"), "git push --force *")
-  assert.equal(deniedPattern("npm test && sudo make install"), "sudo *")
+test("deniedPattern reports the verify guard's reason for a denied command", () => {
+  assert.match(deniedPattern("rm -rf build") ?? "", /denied command: `rm`/)
+  assert.match(deniedPattern("rm -rf /") ?? "", /denied command: `rm`/)
+  assert.match(deniedPattern("sudo apt-get install x") ?? "", /denied command: `sudo`/)
+  assert.match(deniedPattern("git push --force origin main") ?? "", /denied pair: `git push`/)
+  assert.match(deniedPattern("npm test && sudo make install") ?? "", /denied command: `sudo`/)
 })
 
-test("deniedPattern leaves ordinary commands alone", () => {
+test("deniedPattern leaves ordinary acceptance commands alone", () => {
   for (const command of [
     "npm test",
-    "echo rm -rf sudo",
-    "git push origin main",
-    "rm -f build/output.js",
-    "pnpm --filter web run build",
+    "npm run typecheck && npm test",
+    "git log --oneline -5",
+    "git diff HEAD",
+    "cat package.json",
+    "npm ls --depth=0",
+    "./install.sh --dry-run",
+    "bash -n install.sh",
   ]) {
     assert.equal(deniedPattern(command), undefined, command)
   }
@@ -780,7 +784,7 @@ test("verify refuses a denied pattern and never spawns the command", async () =>
   assert.equal(result.exitCode, -1)
   assert.equal(result.reason, "denied-pattern")
   assert.equal(result.stdout, "")
-  assert.match(result.stderr, /rm -rf \*/)
+  assert.match(result.stderr, /denied command: `rm`/)
   assert.equal(readFileSync(marker, "utf8"), "untouched\n", "nothing ran")
 })
 
@@ -799,12 +803,12 @@ test("verify marks a failing acceptance command as not ok and keeps its real exi
   assert.equal(result.ok, false)
 })
 
-test("verify captures the output of the acceptance command", async () => {
-  const result = await verify("echo wippa-verify-stderr-out >&2; exit 0")
+test("verify captures output written to stderr", async () => {
+  const result = await verify("ls /wippa-verify-no-such-path")
 
-  assert.equal(result.exitCode, 0)
-  assert.equal(result.ok, true)
-  assert.ok(result.stderr.includes("wippa-verify-stderr-out"))
+  assert.equal(result.ok, false)
+  assert.notEqual(result.exitCode, 0)
+  assert.ok(result.stderr.includes("/wippa-verify-no-such-path"))
 })
 
 test("verify reports a timeout instead of waiting for the command", async () => {
@@ -848,16 +852,27 @@ test("verify stops a running command when its signal aborts", async () => {
 })
 
 test("verify does not start a command when the signal is already aborted", async () => {
-  const dir = tempDir()
   const controller = new AbortController()
   controller.abort()
 
-  const result = await verify({ command: `touch ${join(dir, "ran.txt")}`, signal: controller.signal })
+  // The fixture script would write a file if it ever ran; the filesystem is
+  // the assertion that nothing was spawned.
+  const dir = tempDir()
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      private: true,
+      scripts: { "make-marker": "node -e 'require(\"node:fs\").writeFileSync(\"made.txt\", \"x\")'" },
+    }),
+  )
+
+  const result = await verify({ command: "npm run make-marker", cwd: dir, signal: controller.signal })
 
   assert.equal(result.ok, false)
   assert.equal(result.reason, "aborted")
-  assert.equal(result.durationMs, 0)
-  assert.deepEqual(readdirSync(dir), [], "nothing ran")
+  assert.equal(result.durationMs, 0, "the command never started, so it ran for zero milliseconds")
+  assert.equal(existsSync(join(dir, "made.txt")), false, "nothing was spawned, so no file was written")
 })
 
 test("verify reports how long the command ran", async () => {
@@ -880,7 +895,19 @@ test("verify truncates a large stream keeping the head and the tail", async () =
 })
 
 test("verify truncates stderr too", async () => {
-  const result = await verify({ command: "seq 1 20000 >&2", outputLimit: 4_096 })
+  // The guard denies shell redirection, so the large stderr stream comes from
+  // a fixture npm script; `npm run` forwards the child's stderr.
+  const dir = tempDir()
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      private: true,
+      scripts: { "big-stderr": "node -e 'for (let i = 1; i <= 5000; i++) console.error(i)'" },
+    }),
+  )
+
+  const result = await verify({ command: "npm run big-stderr", cwd: dir, outputLimit: 4_096 })
 
   assert.equal(result.exitCode, 0)
   assert.ok(result.stderr.includes("[truncated: kept first 2048 and last 2048 of"))
