@@ -18,22 +18,43 @@
  * 3. Fast-fail denials with specific reasons — dangerous words flat and
  *    inside quotes (the `sudo` and `rm` families, network and archive tools,
  *    file mutators, `awk`, `xargs`), interpreter-plus-eval-flag pairs
- *    (`bash -c`, `python -c`, `node -e`, `sed -i`, `find -exec`), mutating
- *    `git` subcommands, package install/publish/exec subcommands, npm's
- *    subcommand position, git's global options and git's per-subcommand
- *    argument rules.
- * 4. `install.sh` may only run with `--dry-run` (or under `bash -n` /
- *    `shellcheck`).
- * 5. The allowlist — the command word of every segment must be in
+ *    (`bash -c`, `python -c`, `node -e`, `sed -i`, `find -exec`), package
+ *    install/publish/exec subcommands, npm's subcommand position (the
+ *    subcommand must immediately follow `npm`; any option in that position
+ *    fails closed), and — in a segment whose command word is `git` — git's
+ *    global options in both `--flag` and `--flag=value` form, git's
+ *    exec-channel options (`--upload-pack`, `--open-files-in-pager`,
+ *    `--ext-diff`, `--textconv`), any argument containing `::` (transport
+ *    syntax such as `ext::cmd`), mutating subcommands and each
+ *    subcommand's argument rules.
+ * 4. Per-command flag policies — `sort` and `uniq` accept only the options
+ *    named in their read-only flag allowlist, so `-o` truncates nothing and
+ *    `--compress-program` executes nothing; `rg` refuses `--pre` and
+ *    `--pre-glob`, which run a program per file searched; and `bash` runs
+ *    only as `bash -n <file>` — `-n` must be the first argument and every
+ *    later word a bare file name, so `bash evil.sh -n` (which executes
+ *    `evil.sh`) never runs.
+ * 5. `install.sh` may only run with `--dry-run`, and only from the command
+ *    word that would execute it (`./install.sh`, or a shell or `shellcheck`
+ *    naming it): `bash -n install.sh` and `shellcheck install.sh` pass as
+ *    static checks, while `cat install.sh` reads the file as data.
+ * 6. The allowlist — the command word of every segment must be in
  *    `ALLOWED_COMMANDS`, or be exactly `./install.sh`. Everything else
- *    (`node`, `npx`, `python3`, `gh`, `docker`, `find`, a planted `./file`)
- *    is refused by default. `bash` is allowed only as `bash -n <file>`.
+ *    (`node`, `npx`, `python3`, `gh`, `docker`, `find`, `sed`, a planted
+ *    `./file`) is refused by default.
  *
  * This is an allowlist of the acceptance surface plus a character policy. It
  * is not a sandbox: an allowed command runs with the authority of the user
- * running OpenCode, and `npm test` / `npm run <script>` execute whatever the
- * project's package.json scripts contain — the script body is the documented
- * residual and is not inspected here.
+ * running OpenCode. The residual is explicit, in two parts. (a) `npm test`
+ * and `npm run <script>` execute whatever the project's package.json scripts
+ * contain — the script body lives in package.json and is not inspected here.
+ * (b) Each allowlisted command is policed only where a rule above is
+ * written: git's denied global and exec-channel options, `sort`'s and
+ * `uniq`'s read-only flag allowlists, `rg`'s denied `--pre` flags and
+ * `bash`'s positional rule. An option no rule names is passed through to the
+ * command — git's read-only options, `grep` flags, `head`/`tail` ranges, and
+ * `git fetch` contacting the network all reach the command itself, under the
+ * user's own authority.
  */
 
 /** The verdict of one guard: allowed, or denied with a reason to show a caller. */
@@ -151,12 +172,16 @@ const DENIED_FIRST_WORDS: ReadonlySet<string> = new Set(["eval", "source", "exec
 /**
  * Every command word that may open an `&&` segment. Absence from this set is
  * the real gate: `node`, `npx`, `python3`, `ruby`, `sh`, `gh`, `docker`,
- * `kubectl`, `find`, `make`, `env` and the rest are refused because they are
- * not named here, not because a rule anticipated them.
+ * `kubectl`, `find`, `make`, `env`, `sed` and the rest are refused because
+ * they are not named here, not because a rule anticipated them. `sed` is
+ * deliberately absent: a sed script is a program of its own — `1e sh -c …`
+ * executes a shell and `w /path` writes a file — and the acceptance chain
+ * never invokes sed, so the whole dialect is refused rather than parsed.
  *
  * `npm` and `git` are gated further down by their own subcommand rules;
- * `bash` only as `bash -n <file>`; `sed` without `-i`; `./install.sh` only
- * with `--dry-run` (its own rule runs before this gate).
+ * `bash` only as `bash -n <file>`; `sort` and `uniq` only under their
+ * read-only flag allowlist; `rg` without `--pre`; `./install.sh` only with
+ * `--dry-run` (its own rule runs before this gate).
  *
  * `sleep`, `seq` and `exit` are inert — they wait, print integers, or end
  * the shell — and the verify tool's own timeout, cancellation, truncation
@@ -190,11 +215,79 @@ const ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
   "date",
   "bash",
   "shellcheck",
-  "sed",
   "sleep",
   "seq",
   "exit",
 ])
+
+// -------------------------------------------------- per-command flag policy
+
+/**
+ * The shape of a read-only flag allowlist: exact long options, and the
+ * single letters that may appear in any short bundle (`sort -nr` passes,
+ * `sort -no` does not). No option in either set takes an operand, so a word
+ * that does not start with `-` is always a file operand.
+ */
+interface UtilityFlagPolicy {
+  readonly short: ReadonlySet<string>
+  readonly long: ReadonlySet<string>
+}
+
+/**
+ * Read-only flag allowlists for the two allowlisted commands that ship an
+ * option able to break the boundary: `sort -o FILE` and BSD `uniq -o FILE`
+ * truncate and write FILE, and `sort --compress-program=…` executes an
+ * arbitrary program. So for `sort` and `uniq` every option word must be
+ * named here — fail closed, bundles included — while words that do not
+ * start with `-` are file operands.
+ */
+const UTILITY_FLAG_ALLOWLIST: ReadonlyMap<string, UtilityFlagPolicy> = new Map([
+  [
+    "sort",
+    {
+      short: new Set(["n", "u", "r", "b", "f", "i", "g", "h", "c", "V", "s"]),
+      long: new Set([
+        "--numeric-sort",
+        "--unique",
+        "--reverse",
+        "--stable",
+        "--ignore-case",
+        "--dictionary-order",
+        "--general-numeric-sort",
+        "--human-numeric-sort",
+        "--check",
+        "--version-sort",
+      ]),
+    },
+  ],
+  [
+    "uniq",
+    {
+      short: new Set(["c", "d", "u", "f", "i", "s", "w"]),
+      long: new Set(["--count", "--unique", "--repeat", "--repeated", "--group", "--all-repeated"]),
+    },
+  ],
+])
+
+/**
+ * `rg --pre=COMMAND` and `rg --pre-glob` run a program per file searched —
+ * the only command-execution channel ripgrep exposes on the command line.
+ * Everything else ripgrep accepts reads files or prints to stdout, which
+ * this tool already captures under its output cap; ripgrep has no
+ * file-writing flag.
+ */
+const COMMAND_DENIED_OPTIONS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["rg", ["--pre", "--pre-glob"]],
+])
+
+/** Whether an option word of `sort` / `uniq` is named in the allowlist. */
+function utilityFlagAllowed(token: string, policy: UtilityFlagPolicy): boolean {
+  if (token.startsWith("--")) return policy.long.has(token)
+  for (const letter of token.slice(1)) {
+    if (!policy.short.has(letter)) return false
+  }
+  return true
+}
 
 // ---------------------------------------------------- interpreter/eval pairs
 
@@ -237,6 +330,10 @@ const EVAL_FLAG_PAIRS: readonly EvalFlagPair[] = [
   { commands: new Set(["perl"]), flags: ["-e", "-E", "--eval"], label: "perl with -e" },
   { commands: new Set(["php"]), flags: ["-r", "--run"], label: "php with -r" },
   { commands: new Set(["lua", "luajit"]), flags: ["-e"], label: "lua with -e" },
+  // `sed -i` is a fast-fail reason, not the only gate: `sed` itself is off
+  // the command allowlist, so every `sed` segment is refused anyway. The
+  // pair stays so `sed -i …` reports the specific reason before the
+  // allowlist refusal.
   { commands: new Set(["sed"]), flags: ["-i", "--in-place"], label: "sed with -i" },
   { commands: new Set(["find"]), flags: ["-exec", "-execdir", "-ok", "-delete"], label: "find with -exec or -delete" },
 ]
@@ -322,10 +419,10 @@ const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Git's global options are refused wherever they appear in a `git` segment:
- * `-c` reconfigures git from the command line (the option-adjacency bypass
- * that ran arbitrary commands), `-C` relocates it, and the rest change which
- * program or pager runs.
+ * Git's global options are refused wherever they appear in a `git` segment,
+ * as `--flag` or `--flag=value`: `-c` reconfigures git from the command line
+ * (the option-adjacency bypass that ran arbitrary commands), `-C`
+ * relocates it, and the rest change which program or pager runs.
  */
 const GIT_DENIED_GLOBAL_OPTIONS: ReadonlySet<string> = new Set([
   "-c",
@@ -336,6 +433,22 @@ const GIT_DENIED_GLOBAL_OPTIONS: ReadonlySet<string> = new Set([
   "--paginate",
   "--no-pager",
 ])
+
+/**
+ * Git options that run a program the command line cannot show, refused in
+ * every `git` segment, in both `--flag` and `--flag=value` form:
+ * `--upload-pack` spawns the named program locally (from `fetch` and from
+ * `ls-remote`, which executes it without contacting a remote first),
+ * `--open-files-in-pager` runs it from `git grep`, and `--ext-diff` /
+ * `--textconv` run the diff driver and textconv filters the repository
+ * config names.
+ */
+const GIT_EXEC_CHANNEL_OPTIONS: readonly string[] = [
+  "--upload-pack",
+  "--open-files-in-pager",
+  "--ext-diff",
+  "--textconv",
+]
 
 /** These subcommands may not carry `--output`, which writes a file from git. */
 const GIT_OUTPUT_DENY: ReadonlySet<string> = new Set(["show", "archive", "diff", "log"])
@@ -407,10 +520,11 @@ const PACKAGE_MANAGERS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
 )
 
 /**
- * npm's own allowlist: the subcommand must be the first non-option word, so
- * `npm --yes exec …` and `npm pkg set …` are refused rather than parsed past.
- * `npm run` and `npm test` remain the documented residual — the script body
- * they execute lives in package.json and is not inspected here.
+ * npm's own allowlist: the subcommand must immediately follow `npm`, and
+ * any option in that position fails closed — `npm --yes exec …`,
+ * `npm pkg set …` and `npm config set …` are refused rather than parsed
+ * past. `npm run` and `npm test` remain the documented residual — the
+ * script body they execute lives in package.json and is not inspected here.
  */
 const NPM_SUBCOMMANDS: ReadonlySet<string> = new Set(["test", "run", "ls"])
 
@@ -484,29 +598,43 @@ function guardSegment(words: string[]): string | undefined {
       }
     }
 
-    if (name === "git") {
-      if (index === 0) {
-        // Global options first: `-c` and `-C` change what git runs and
-        // where, which is how option adjacency escaped the old denylist.
-        for (const token of words) {
-          if (GIT_DENIED_GLOBAL_OPTIONS.has(token)) {
+    // Every git rule is command-position only: `git` as an argument word is
+    // data (`echo git push` prints two words), and the allowlist gate below
+    // decides which command words run at all.
+    if (name === "git" && index === 0) {
+      // Global options first: `-c` and `-C` change what git runs and
+      // where, which is how option adjacency escaped the old denylist.
+      // `flagMatches` matches the `--flag=value` spellings too, so
+      // `--git-dir=/x` fails exactly like `--git-dir`. The exec-channel
+      // options and `::` transport syntax run or name a program outside the
+      // command line; both are refused across the whole segment, at any
+      // position.
+      for (const token of words) {
+        for (const option of GIT_DENIED_GLOBAL_OPTIONS) {
+          if (flagMatches(token, option)) {
             return `denied git global option: \`${token}\` (git configuration and location are set outside the command)`
           }
         }
-        const leading = words[1]
-        if (leading === undefined) {
-          return "git subcommand missing (only read-only subcommands pass)"
+        for (const option of GIT_EXEC_CHANNEL_OPTIONS) {
+          if (flagMatches(token, option)) {
+            return `denied git option: \`${token}\` (runs a program loaded from configuration or named in the argument)`
+          }
         }
-        if (leading.startsWith("-")) {
-          return `denied git option before the subcommand: \`${leading}\` (fail closed; only read-only subcommands pass)`
+        if (token.includes("::")) {
+          return `denied git transport syntax: \`${token}\` (\`::\` names a transport that runs an arbitrary command)`
         }
       }
-
-      const subcommand = words[index + 1]
+      const subcommand = words[1]
+      if (subcommand === undefined) {
+        return "git subcommand missing (only read-only subcommands pass)"
+      }
+      if (subcommand.startsWith("-")) {
+        return `denied git option before the subcommand: \`${subcommand}\` (fail closed; only read-only subcommands pass)`
+      }
       // `git branch` lists with the pure-listing flags and no positional
       // words; `git remote` lists with `-v` or shows one remote by name.
       if (subcommand === "branch") {
-        for (let next = index + 2; next < words.length; next++) {
+        for (let next = 2; next < words.length; next++) {
           const argument = words[next]!
           if (!GIT_BRANCH_LIST_FLAGS.has(argument)) {
             return "denied arguments to `git branch` (only pure-listing flags are allowed)"
@@ -515,7 +643,7 @@ function guardSegment(words: string[]): string | undefined {
         continue
       }
       if (subcommand === "remote") {
-        const arguments_ = words.slice(index + 2)
+        const arguments_ = words.slice(2)
         const listing = arguments_.every((argument) => argument === "-v")
         const show =
           arguments_[0] === "show" &&
@@ -525,30 +653,25 @@ function guardSegment(words: string[]): string | undefined {
         }
         continue
       }
-      if (subcommand !== undefined && GIT_MUTATING.has(subcommand)) {
+      if (GIT_MUTATING.has(subcommand)) {
         return `denied pair: \`git ${subcommand}\` (mutating git subcommand)`
       }
-      if (index === 0 && subcommand !== undefined) {
-        if (subcommand === "fetch") {
-          for (const token of words) {
-            if (token.startsWith("+")) {
-              return "denied `git fetch` refspec: a `+` force-update refspec is refused"
-            }
-            if (token.startsWith("--upload-pack")) {
-              return "denied `git fetch` option: `--upload-pack` runs an arbitrary command"
-            }
+      if (subcommand === "fetch") {
+        for (const token of words.slice(2)) {
+          if (token.startsWith("+")) {
+            return "denied `git fetch` refspec: a `+` force-update refspec is refused"
           }
         }
-        if (GIT_OUTPUT_DENY.has(subcommand)) {
-          for (const token of words) {
-            if (token.startsWith("--output")) {
-              return `denied \`git ${subcommand} --output\`: writing a file from git is refused`
-            }
+      }
+      if (GIT_OUTPUT_DENY.has(subcommand)) {
+        for (const token of words.slice(2)) {
+          if (token.startsWith("--output")) {
+            return `denied \`git ${subcommand} --output\`: writing a file from git is refused`
           }
         }
-        if (!GIT_SUBCOMMANDS.has(subcommand)) {
-          return `denied git subcommand: \`${subcommand}\` (not in the read-only allowlist)`
-        }
+      }
+      if (!GIT_SUBCOMMANDS.has(subcommand)) {
+        return `denied git subcommand: \`${subcommand}\` (not in the read-only allowlist)`
       }
     }
 
@@ -572,6 +695,32 @@ function guardSegment(words: string[]): string | undefined {
         return `denied npm subcommand: \`${subcommand}\` (only test, run and ls pass)`
       }
     }
+
+    // Per-command flag policies, command-position only: `sort` and `uniq`
+    // accept only options named in their read-only allowlist (`-o` truncates
+    // a file, `--compress-program` executes a program), and `rg` refuses the
+    // flags that run a program per file searched. An option no rule names is
+    // passed through to the command — the header's residual says so.
+    if (index === 0) {
+      const utilityFlags = UTILITY_FLAG_ALLOWLIST.get(name)
+      if (utilityFlags !== undefined) {
+        for (const token of words.slice(1)) {
+          if (token.startsWith("-") && !utilityFlagAllowed(token, utilityFlags)) {
+            return `denied \`${name}\` option: \`${token}\` (not in ${name}'s read-only flag allowlist)`
+          }
+        }
+      }
+      const deniedOptions = COMMAND_DENIED_OPTIONS.get(name)
+      if (deniedOptions !== undefined) {
+        for (const token of words.slice(1)) {
+          for (const option of deniedOptions) {
+            if (flagMatches(token, option)) {
+              return `denied \`${name}\` option: \`${token}\` (runs a program this guard cannot see)`
+            }
+          }
+        }
+      }
+    }
   }
 
   // A quoted span is one shell word, but the flat denylist applies to the
@@ -585,14 +734,23 @@ function guardSegment(words: string[]): string | undefined {
     }
   }
 
-  if (words.some((word) => basename(word) === "install.sh")) {
-    if (!words.includes("--dry-run")) {
-      const command = basename(words[0] ?? "")
-      const syntaxCheck = SHELLS.has(command) && words.slice(1).includes("-n")
-      const staticAnalysis = command === "shellcheck"
-      if (!syntaxCheck && !staticAnalysis) {
-        return "install.sh may only be run with --dry-run"
-      }
+  // `install.sh` may only run with `--dry-run`, and only from the command
+  // word that would execute it: `./install.sh` itself, or a shell or
+  // `shellcheck` naming it (`bash -n install.sh` parses without running,
+  // `shellcheck install.sh` only lints). In argument position the word is
+  // data — `cat install.sh` and `grep install.sh README.md` read the file,
+  // and the allowlist gate below decides whether those run at all.
+  const commandName = basename(words[0] ?? "")
+  const shellCommand = SHELLS.has(commandName)
+  const staticAnalysis = commandName === "shellcheck"
+  const runsInstallSh =
+    commandName === "install.sh" ||
+    ((shellCommand || staticAnalysis) &&
+      words.slice(1).some((argument) => basename(argument) === "install.sh"))
+  if (runsInstallSh && !words.includes("--dry-run")) {
+    const syntaxCheck = shellCommand && words[1] === "-n"
+    if (!syntaxCheck && !staticAnalysis) {
+      return "install.sh may only be run with --dry-run"
     }
   }
 
@@ -608,13 +766,17 @@ function guardSegment(words: string[]): string | undefined {
       return `denied command: \`${commandWord}\` (not in the acceptance allowlist)`
     }
     if (commandWord === "bash") {
-      const arguments_ = words.slice(1)
-      if (!arguments_.includes("-n")) {
+      // `bash -n <file>` only: `-n` must be the first argument and every
+      // later word a bare file name. Accepting `-n` anywhere in the
+      // arguments let `bash evil.sh -n` execute evil.sh with `-n` as a
+      // positional parameter — and `bash install.sh -n` run the installer
+      // without `--dry-run`.
+      if (words[1] !== "-n" || words[2] === undefined) {
         return "bash is only allowed as `bash -n <file>` (syntax check)"
       }
-      for (const argument of arguments_) {
-        if (argument.startsWith("-") && argument !== "-n") {
-          return `denied bash option: \`${argument}\` (only \`-n\` passes)`
+      for (const argument of words.slice(2)) {
+        if (argument.startsWith("-")) {
+          return `denied bash option: \`${argument}\` (only \`bash -n <file>\` passes)`
         }
       }
     }
@@ -630,8 +792,13 @@ function guardSegment(words: string[]): string | undefined {
  *
  * The policy lives in this file's header: a character policy, `&&` chains
  * only, no `NAME=` assignment prefixes, fast-fail denials with reasons, the
- * `install.sh` `--dry-run` rule, and finally the allowlist on the command
- * word. A command outside the allowlist never runs.
+ * per-command flag policies, the `install.sh` `--dry-run` rule, and finally
+ * the allowlist on the command word. A segment whose command word is in
+ * neither `ALLOWED_COMMANDS` nor the exact string `./install.sh` never runs:
+ * it is refused here, before the permission check and before any spawn. What
+ * an allowed command may still do beyond these rules is the header's
+ * residual paragraph — package.json script bodies, and options no
+ * per-command rule names — not an accident of this function.
  */
 export function guardVerifyCommand(command: string): GuardVerdict {
   if (command.trim().length === 0) return denied("command is empty")

@@ -81,7 +81,7 @@ test("denies archive tools flat", () => {
   }
 })
 
-test("denies mutating git subcommands, wherever the word git appears", () => {
+test("denies mutating git subcommands in command position, while `git` as an argument word is data", () => {
   assertDenied("git push origin main", "mutating git subcommand")
   assertDenied("git push --force origin main", "denied pair: `git push`")
   assertDenied("git commit -m x", "denied pair: `git commit`")
@@ -93,7 +93,14 @@ test("denies mutating git subcommands, wherever the word git appears", () => {
   assertDenied("git branch -D feature", "git branch")
   assertDenied("git branch feature", "git branch")
   assertDenied("git tag v1", "denied pair: `git tag`")
-  assertDenied("env git push", "denied pair: `git push`")
+  // `env git push` is denied by the allowlist gate — `env` is not a command
+  // word that passes — rather than by a git rule: git rules run only where
+  // `git` is itself the command word.
+  assertDenied("env git push", "acceptance allowlist")
+  // Git as an argument word is data: `echo` prints two words, it does not
+  // run git, so the allowlist decides and `echo` is on it.
+  assertAllowed("echo git push")
+  assertAllowed("echo git status --porcelain")
 })
 
 test("allows read-only git, and git branch / git remote in listing form", () => {
@@ -149,6 +156,10 @@ test("allows only npm test, run and ls — every other package manager and npm s
   assertDenied("npx tsc --noEmit", "acceptance allowlist")
   assertDenied("npx --yes @playwright/mcp@0.0.83 --isolated", "acceptance allowlist")
   assertDenied("npm outdated", "only test, run and ls pass")
+  // Quality B: the subcommand must immediately follow `npm` — ANY option in
+  // that position fails closed, not just the ones a parser would skip.
+  assertDenied("npm -q test", "npm option before the subcommand")
+  assertDenied("npm --silent run build", "npm option before the subcommand")
   assertDenied("pnpm --filter web run build", "acceptance allowlist")
   assertDenied("yarn test", "acceptance allowlist")
   assertDenied("cargo test", "acceptance allowlist")
@@ -196,11 +207,18 @@ test("denies python, node, ruby, perl, php and lua eval flags", () => {
   assertDenied("lua -e os.execute", "lua with -e")
 })
 
-test("denies sed -i in every spelling", () => {
+test("denies sed -i in every spelling, and sed itself is off the allowlist", () => {
   assertDenied("sed -i s/a/b/ f", "sed with -i")
   assertDenied("sed -i.bak s/a/b/ f", "sed with -i")
   assertDenied("sed --in-place s/a/b/ f", "sed with -i")
-  assertAllowed("sed -n 1,5p f")
+  // sed was removed from the command allowlist: a sed script is a program of
+  // its own (`1e sh -c …` executes a shell, `w /path` writes a file,
+  // `s///e` executes its replacement), and the acceptance chain never
+  // invokes sed — so the dialect is refused rather than parsed.
+  assertDenied("sed -n 1,5p f", "acceptance allowlist")
+  assertDenied("sed 's/a/b/' f", "acceptance allowlist")
+  assertDenied("sed '1e sh -c id' data.txt", "acceptance allowlist")
+  assertDenied("sed 'w /tmp/out' f", "acceptance allowlist")
 })
 
 test("denies find outright, including its -exec and -delete flags", () => {
@@ -224,8 +242,24 @@ test("runs install.sh only with --dry-run, and never as a plain script", () => {
   assertAllowed("bash -n install.sh")
   assertDenied("./install.sh", "install.sh may only be run with --dry-run")
   assertDenied("./install.sh --force", "install.sh may only be run with --dry-run")
+  // Quality C: the rule is gated on the command word, so `./install.sh -n`
+  // cannot borrow the shell syntax-check exemption — `-n` is not an option
+  // `./install.sh` understands, it would run the script.
+  assertDenied("./install.sh -n", "install.sh may only be run with --dry-run")
   assertDenied("bash install.sh", "install.sh may only be run with --dry-run")
   assertDenied("sh ./install.sh --force", "install.sh may only be run with --dry-run")
+})
+
+test("install.sh in argument position is data: readers pass, runners need --dry-run", () => {
+  // Quality C: the old rule fired on any segment containing a word named
+  // `install.sh`, so reading the file was denied for no safety reason.
+  assertAllowed("cat install.sh")
+  assertAllowed("grep install.sh README.md")
+  assertAllowed("ls install.sh")
+  assertAllowed("head -5 ./install.sh")
+  // The rule still fires for everything that would execute it.
+  assertDenied("bash install.sh -n", "install.sh may only be run with --dry-run")
+  assertDenied("shellcheck evil.sh && bash install.sh", "install.sh may only be run with --dry-run")
 })
 
 // -------------------------------------------------- the allowed surface
@@ -253,6 +287,26 @@ test("the allowed surface: read-only inspection commands and chains over them pa
     "bash -n install.sh",
     "git status && git log -1 && cat README.md",
     "npm test && git diff HEAD && grep -rn guard tools/",
+  ]) {
+    assertAllowed(command)
+  }
+})
+
+test("the round-2 allowed surface: the acceptance chain, data mentions and ordinary read-only forms pass", () => {
+  for (const command of [
+    // The full standard chain, unchanged.
+    "npm run typecheck && npm test && npm run check:claims && ./install.sh --dry-run && npm run eval -- --check && bash -n install.sh",
+    // install.sh as data, git as data (quality C and D).
+    "cat install.sh",
+    "grep install.sh README.md",
+    "echo git push",
+    // Ordinary sort/uniq, the static checks, and rg.
+    "sort f",
+    "sort -n f",
+    "uniq f",
+    "bash -n install.sh",
+    "shellcheck install.sh",
+    "rg pattern .",
   ]) {
     assertAllowed(command)
   }
@@ -295,6 +349,88 @@ test("the regression battery: every string the reviews live-proved ALLOW is now 
   for (const [command, reasonPart] of battery) {
     assertDenied(command, reasonPart)
   }
+})
+
+test("the round-2 regression battery: every flag-level vector the review live-proved is denied with a reason", () => {
+  // Each string passed the previous guard — marker files were written and
+  // programs ran. The reason substring pins which rule fires now.
+  const battery: readonly (readonly [string, string])[] = [
+    ["bash evil.sh -n", "bash is only allowed as `bash -n <file>`"],
+    ["bash install.sh -n", "install.sh may only be run with --dry-run"],
+    ["sed '1e sh -c id' data.txt", "acceptance allowlist"],
+    ["sed 'w /tmp/out' f", "acceptance allowlist"],
+    ["git ls-remote --upload-pack=id ./x", "--upload-pack"],
+    ["git fetch origin --upload-pack=id", "--upload-pack"],
+    ["git grep --open-files-in-pager=echo hello", "--open-files-in-pager"],
+    ["sort --compress-program=/tmp/pw.sh f", "read-only flag allowlist"],
+    ["sort -o out.txt in.txt", "read-only flag allowlist"],
+    ["rg --pre=/tmp/pw.sh pat f.txt", "--pre"],
+    ["git log --ext-diff", "--ext-diff"],
+    ["git show --textconv", "--textconv"],
+    ["git ls-remote 'ext::sh -c id'", "::"],
+    ["git log --git-dir=/x", "git global option"],
+  ]
+  for (const [command, reasonPart] of battery) {
+    assertDenied(command, reasonPart)
+  }
+})
+
+test("bash runs only as `bash -n <file>`: -n first, then bare file names", () => {
+  assertAllowed("bash -n install.sh")
+  assertAllowed("bash -n tools/guards.ts")
+  assertDenied("bash -n", "bash is only allowed as `bash -n <file>`")
+  assertDenied("bash -n -v install.sh", "denied bash option")
+  assertDenied("bash install.sh", "install.sh may only be run with --dry-run")
+  // `bash -c` is caught by the interpreter/eval pair before the positional rule.
+  assertDenied("bash -n -c id", "shell with -c")
+})
+
+test("git's exec-channel options, =forms of globals and :: transport are refused across every git segment", () => {
+  // Separate-argument forms, not just `--flag=value`.
+  assertDenied("git fetch origin --upload-pack id", "--upload-pack")
+  assertDenied("git ls-remote --upload-pack ./x", "--upload-pack")
+  assertDenied("git grep --open-files-in-pager id hello", "--open-files-in-pager")
+  assertDenied("git diff --ext-diff HEAD", "--ext-diff")
+  assertDenied("git blame --textconv file.ts", "--textconv")
+  assertDenied("git log --git-dir /x", "git global option")
+  assertDenied("git status --exec-path=/bin", "git global option")
+  assertDenied("git shortlog 'ext::sh -c id'", "::")
+  // The read-only surface around them is untouched.
+  assertAllowed("git log --oneline -3")
+  assertAllowed("git fetch origin")
+  assertAllowed("git remote show origin")
+})
+
+test("sort and uniq accept only their read-only flag allowlist", () => {
+  for (const command of [
+    "sort f",
+    "sort -n f",
+    "sort -nr f",
+    "sort --reverse f",
+    "sort -u names.txt",
+    "uniq f",
+    "uniq -c f",
+  ]) {
+    assertAllowed(command)
+  }
+  for (const [command, reasonPart] of [
+    ["sort -o out.txt in.txt", "read-only flag allowlist"],
+    ["sort --compress-program=/tmp/pw.sh f", "read-only flag allowlist"],
+    ["sort -z f", "read-only flag allowlist"],
+    ["sort -no out f", "read-only flag allowlist"],
+    ["uniq -o out f", "read-only flag allowlist"],
+    ["uniq --zero-terminated f", "read-only flag allowlist"],
+  ] as const) {
+    assertDenied(command, reasonPart)
+  }
+})
+
+test("rg refuses only the flags that run a program per file; its read-only surface passes", () => {
+  assertDenied("rg --pre=/tmp/pw.sh pat f.txt", "--pre")
+  assertDenied("rg --pre /tmp/pw.sh pat f.txt", "--pre")
+  assertDenied("rg --pre-glob '!x' --pre /tmp/p.sh pat", "--pre")
+  assertAllowed("rg pattern .")
+  assertAllowed("rg -n --glob '*.ts' pattern tools/")
 })
 
 test("read-only inspection commands pass", () => {

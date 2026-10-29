@@ -414,6 +414,26 @@ test("verify refuses a cwd that escapes the location or is not a sane path", asy
   assert.equal(host.permissionCalls.length, 0)
 })
 
+test("verify runs with a valid custom cwd resolved against the location", async () => {
+  // Quality E: the negative cwd test existed; this is the positive
+  // counterpart — a sane relative cwd passes validation, resolves against
+  // the location directory, and the command actually runs there.
+  const { root } = probeFixture()
+  mkdirSync(join(root, "sub"), { recursive: true })
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = await runTool(host, "verify", { command: "pwd", cwd: "sub" })
+  const result = JSON.parse(content)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.cwd, join(root, "sub"), "the relative cwd resolves against the location directory")
+  assert.ok(result.stdout.trim().endsWith("sub"), `pwd ran in sub, got ${JSON.stringify(result.stdout)}`)
+  // A valid cwd passes validation and reaches the permission assertion.
+  assert.equal(host.permissionCalls.length, 1)
+})
+
 test("verify passes timeoutMs through to the command", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)

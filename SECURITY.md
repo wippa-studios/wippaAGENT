@@ -29,10 +29,12 @@ refused as an environment-variable assignment prefix; a command word may not
 be a path — only the exact string `./install.sh` may be run by path, so a
 planted `./file` cannot be executed.
 
-The allowlist: every command word must be named in `tools/guards.ts`, or it
-is refused with a reason. The list is `npm` with only `test`, `run` and `ls`
-(the subcommand in the first non-option word, so `npm pkg set`, `npm config
-set` and `npm --yes exec` are refused); `git` with only `status`, `log`,
+The allowlist: every segment's command word must be named in
+`tools/guards.ts`, or be exactly `./install.sh`, or the segment is refused
+with a reason before anything spawns. The list is `npm` with only `test`,
+`run` and `ls` (the subcommand must immediately follow `npm`; any option in
+that position fails closed, so `npm pkg set`, `npm config set` and
+`npm --yes exec` are refused); `git` with only `status`, `log`,
 `diff`, `show`, `blame`, `ls-remote`, `rev-parse`, `describe`, `grep`,
 `shortlog`, `fetch`, plus `branch` and `remote` in pure-listing form
 (`branch` accepts only `-a -r -v -vv -l --list --all --show-current` and no
@@ -40,31 +42,45 @@ positional word; `remote` accepts only no arguments, `-v`, or `show` with an
 optional remote name); the read-only
 utilities `grep`, `rg`, `cat`, `head`, `tail`, `wc`, `ls`, `test`, `echo`,
 `true`, `false`, `basename`, `dirname`, `realpath`, `pwd`, `sort`, `uniq`,
-`tr`, `cut`, `stat`, `sha256sum`, `which`, `date`, and the inert `sleep`,
+`tr`, `cut`, `stat`, `sha256sum`, `which`, `date` — `sort` and `uniq` only
+under their read-only flag allowlist (every option outside it is refused,
+including `-o` and `--compress-program`), and `rg` without `--pre` and
+`--pre-glob` — and the inert `sleep`,
 `seq` and `exit` (which wait, print integers or end the shell, and are what
 the tool's own timeout, cancellation, truncation and exit-code tests run);
 the static checks
-`shellcheck`, `sed` without `-i`, and `bash` only as `bash -n <file>`; and
-`./install.sh` only with
-`--dry-run`. Everything else — `node`, `npx`, `python3`, `sh`, `curl`, `gh`,
+`shellcheck` and `bash -n <file>` (`-n` must be the first argument, every
+later word a file name); and `./install.sh` only with
+`--dry-run`. Everything else — `node`, `npx`, `python3`, `sh`, `sed`, `curl`, `gh`,
 `docker`, `kubectl`, `awk`, `xargs`, `find`, `make`, `env` and the rest — is
 denied because it is not on the list.
 
 Fast-fail denials with specific reasons run on top: the `sudo` and `rm`
 families, network and archive tools, file mutators, `awk` and `xargs` are
 refused as words, flat and inside quotes; interpreter-plus-eval-flag pairs
-such as `bash -c`, `python -c`, `node -e` and `sed -i` are refused; git's
-global options (`-c`, `-C`, `--git-dir`, `--work-tree`, `--exec-path`,
-`--paginate`, `--no-pager`) are refused anywhere in a `git` segment, and any
-option before the git subcommand fails closed; `git fetch` refuses a `+`
-force-update refspec and `--upload-pack`; `git show`, `git diff`, `git log`
-and `git archive` refuse `--output`. Nothing is inferred as read-only:
-`git worktree list`, `git submodule status`, `git stash list` and
-`git bisect log` are denied, because only the subcommands named above pass.
+such as `bash -c`, `python -c`, `node -e` and `sed -i` are refused; in a
+segment whose command word is `git`, git's global options (`-c`, `-C`,
+`--git-dir`, `--work-tree`, `--exec-path`, `--paginate`, `--no-pager`) are
+refused in both `--flag` and `--flag=value` form, any option before the git
+subcommand fails closed, the exec-channel options `--upload-pack`,
+`--open-files-in-pager`, `--ext-diff` and `--textconv` are refused anywhere
+in the segment, and any argument containing `::` (transport syntax such as
+`ext::cmd`) is refused; `git fetch` refuses a `+` force-update refspec;
+`git show`, `git diff`, `git log` and `git archive` refuse `--output`;
+`install.sh` runs only with `--dry-run`, only as the command itself —
+`cat install.sh` reads it as data; `sort` and `uniq` refuse every option
+outside their read-only flag allowlist; `rg` refuses `--pre` and
+`--pre-glob`. Nothing is inferred as read-only: `git worktree list`,
+`git submodule status`, `git stash list` and `git bisect log` are denied,
+because only the subcommands named above pass.
 
 The documented residual: `npm test` and `npm run <script>` execute whatever
 the project's package.json scripts contain. The guard inspects the npm
-invocation, not the script body, so package.json is trusted input.
+invocation, not the script body, so package.json is trusted input. Beyond
+that, each allowlisted command is policed only where `tools/guards.ts`
+writes a rule — git's global and exec-channel options, `sort`'s and `uniq`'s
+flag allowlists, `rg`'s denied `--pre` flags, `bash`'s positional rule — so
+an option no rule names is passed through to the command itself.
 
 After the guard, the tool asserts a `verify` permission action with the
 command as its resource before spawning anything, so a deny rule for `verify`
