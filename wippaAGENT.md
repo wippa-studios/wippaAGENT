@@ -81,7 +81,7 @@ One primary, twelve subagents, three MCP servers.
 
 ## Quick routing (need → subagent)
 
-The roster table above is the one routing source. Match the need to a `Covers` cell: the agent whose cell names the capability owns the task. Every need resolves to exactly one subagent, so if a task needs two, dispatch two. When two agents plausibly cover a need, apply the Tie-break rules below and record the choice in the delegation brief.
+The roster table above is the one routing source. Match the need to a `Covers` cell: the agent whose cell names the capability owns the task. Every need resolves to exactly one subagent after the tie-breaks below, so if a task needs two, dispatch two. When two agents plausibly cover a need, apply the Tie-break rules below and record the choice in the delegation brief.
 
 ## Tie-break rules
 
