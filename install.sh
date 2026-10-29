@@ -7,8 +7,9 @@
 # overwrites anything it did not put there, unless --force is given.
 #
 # Source repository: https://github.com/wippa-studios/wippaAGENT
-# The file wippaAGENT.md is the primary agent definition. It is an agent id,
-# not the name of this repository.
+# The file wippaAGENT.md is the primary agent definition. It carries the agent
+# id for OpenCode, and here that id happens to coincide with the repository
+# name (wippaAGENT); the two are still distinct things.
 
 set -euo pipefail
 

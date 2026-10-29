@@ -53,7 +53,10 @@ const catalogTs = read("tools/catalog.ts")
 const rosterMatch = catalogTs.match(/ROSTER_FILENAME\s*=\s*"([^"]+)"/)
 if (!rosterMatch) {
   fail("tools/catalog.ts: no ROSTER_FILENAME = \"…\" found")
-} else if (primaryMatch && rosterMatch[1] !== primaryMatch[1]) {
+} else if (!primaryMatch) {
+  // Assertion 1 already failed; say so instead of implying agreement.
+  fail("tools/catalog.ts: cannot compare ROSTER_FILENAME — install.sh declares no PRIMARY_AGENT_FILE (see assertion 1)")
+} else if (rosterMatch[1] !== primaryMatch[1]) {
   fail(
     `tools/catalog.ts ROSTER_FILENAME="${rosterMatch[1]}" differs from install.sh PRIMARY_AGENT_FILE="${primaryMatch[1]}"`,
   )
@@ -69,7 +72,9 @@ const opencode = JSON.parse(read("opencode.json"))
 const defaultAgent = opencode.default_agent
 if (typeof defaultAgent !== "string") {
   fail('opencode.json: "default_agent" is missing or not a string')
-} else if (primaryMatch && `${defaultAgent}.md` !== primaryMatch[1]) {
+} else if (!primaryMatch) {
+  fail("opencode.json: cannot check default_agent — install.sh declares no PRIMARY_AGENT_FILE (see assertion 1)")
+} else if (`${defaultAgent}.md` !== primaryMatch[1]) {
   fail(
     `opencode.json default_agent="${defaultAgent}" resolves to "${defaultAgent}.md", not "${primaryMatch[1]}"`,
   )
@@ -78,8 +83,8 @@ if (typeof defaultAgent !== "string") {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Roster consistency — every categories/*/*.md has a roster row, and every
-//    roster row has a file. (The primary id row points at the root file.)
+// 4. Roster consistency — every categories/*/*.md has a roster row, every
+//    roster row has a file, and the primary id itself has a row.
 // ---------------------------------------------------------------------------
 const rosterFile = primaryMatch ? primaryMatch[1] : "wippaAGENT.md"
 const rosterText = read(rosterFile)
@@ -103,51 +108,87 @@ if (headingIndex === -1) {
     }
   }
 
+  let ok = true
   for (const id of categoryIds) {
-    if (!rosterIds.includes(id)) fail(`roster: agent file categories/*/${id}.md has no row in "${rosterFile}"`)
+    if (!rosterIds.includes(id)) {
+      ok = false
+      fail(`roster: agent file categories/*/${id}.md has no row in "${rosterFile}"`)
+    }
   }
-  // The primary id (from the root filename) is also a roster row with a file.
+  // The primary id (from the root filename) must have its own roster row.
   const primaryId = rosterFile.endsWith(".md") ? basename(rosterFile, ".md") : rosterFile
+  if (!rosterIds.includes(primaryId)) {
+    ok = false
+    fail(`roster: primary agent "${primaryId}" has no row in "${rosterFile}"`)
+  }
   for (const id of rosterIds) {
     if (id === primaryId) continue
-    if (!categoryIds.includes(id)) fail(`roster: row "${id}" in "${rosterFile}" has no matching categories/*/${id}.md`)
+    if (!categoryIds.includes(id)) {
+      ok = false
+      fail(`roster: row "${id}" in "${rosterFile}" has no matching categories/*/${id}.md`)
+    }
   }
-  if (failures === 0) pass(`roster lists ${rosterIds.length} ids, matching categories/*/*.md (${categoryIds.length} files)`)
+  if (ok) {
+    pass(`roster lists ${rosterIds.length} ids (incl. primary "${primaryId}"), matching categories/*/*.md (${categoryIds.length} files)`)
+  }
 }
 
 // ---------------------------------------------------------------------------
-// 5. Stale-id scan — the old primary id must not survive anywhere tracked.
-//    CHANGELOG.md is excluded by name so a future changelog may mention it.
+// 5. Stale-id scan — the old primary id must not survive in any tracked file
+//    name or content, in any case variant. CHANGELOG.md is excluded by name
+//    so a future changelog may mention the old id.
 // ---------------------------------------------------------------------------
 // Built from parts so this script never trips its own stale-id scan.
 const STALE_ID = ["agent", "WIPPA"].join("")
-const EXCLUDED = new Set(["CHANGELOG.md"])
-const tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
-  .split("\n")
-  .filter(Boolean)
+const needle = STALE_ID.toLowerCase()
+const EXCLUDED = new Set(["changelog.md"])
+let tracked = []
+try {
+  tracked = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean)
+} catch (err) {
+  fail(`stale-id scan: git ls-files failed (${err.message.split("\n")[0]}) — is this a git checkout?`)
+}
 let staleHits = 0
 for (const file of tracked) {
-  if (EXCLUDED.has(basename(file))) continue
+  if (EXCLUDED.has(basename(file).toLowerCase())) continue
+  // File names count too: an agent definition named after the stale id is
+  // exactly the drift this gate exists to catch.
+  if (file.toLowerCase().includes(needle)) {
+    fail(`stale id "${STALE_ID}" appears in tracked file name: ${file}`)
+    staleHits++
+    continue
+  }
   let text
   try {
     text = readFileSync(join(ROOT, file), "utf8")
   } catch {
     continue // deleted-but-staged is not this script's problem
   }
-  if (text.includes(STALE_ID)) {
+  if (text.toLowerCase().includes(needle)) {
     fail(`stale id "${STALE_ID}" still present in ${file}`)
     staleHits++
   }
 }
-if (staleHits === 0) pass(`no tracked file contains the stale id "${STALE_ID}"`)
+if (tracked.length > 0 && staleHits === 0) pass(`no tracked file name or content contains the stale id "${STALE_ID}"`)
 
 // ---------------------------------------------------------------------------
-// 6. Tool count — tools/index.ts registrations must equal the README badge,
-//    and the README must not carry the old "5 Plugin tools" wording.
+// 6. Tool count — tools/index.ts registrations (comments stripped, so a
+//    commented-out registration does not count) must equal BOTH README
+//    surfaces: the shields badge and the "At a glance" table cell.
 // ---------------------------------------------------------------------------
-const indexTs = read("tools/index.ts")
-const toolCount = [...indexTs.matchAll(/editor\.add\(\{/g)].length
+/** Remove block comments and full-line // comments before counting registrations. */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join("\n")
+}
+const toolCount = [...stripComments(read("tools/index.ts")).matchAll(/editor\.add\(\{/g)].length
 const readme = read("README.md")
+
 const badgeMatch = readme.match(/badge\/tools-(\d+)-/)
 if (!badgeMatch) {
   fail("README.md: no `badge/tools-N-` shields.io badge found")
@@ -155,6 +196,17 @@ if (!badgeMatch) {
   fail(`README.md tools badge says ${badgeMatch[1]}, tools/index.ts registers ${toolCount}`)
 } else {
   pass(`README tools badge (${badgeMatch[1]}) matches tools/index.ts registrations (${toolCount})`)
+}
+
+// The "At a glance" cell is its own claim: <h2>N</h2><b>Plugin tools</b>.
+// The badge and the cell can drift apart, so check the cell directly.
+const cellMatch = readme.match(/<h2>(\d+)<\/h2><b>Plugin tools/)
+if (!cellMatch) {
+  fail('README.md: no "At a glance" cell `<h2>N</h2><b>Plugin tools` found')
+} else if (Number(cellMatch[1]) !== toolCount) {
+  fail(`README.md "Plugin tools" cell says ${cellMatch[1]}, tools/index.ts registers ${toolCount}`)
+} else {
+  pass(`README "Plugin tools" cell (${cellMatch[1]}) matches tools/index.ts registrations (${toolCount})`)
 }
 if (readme.includes("5 Plugin tools")) {
   fail('README.md still contains the stale string "5 Plugin tools"')
