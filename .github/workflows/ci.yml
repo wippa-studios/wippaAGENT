@@ -19,5 +19,8 @@ jobs:
           node-version: 24
       - run: npm run typecheck
       - run: npm test
+      - run: npm run check:claims
+      - run: ./install.sh --dry-run
+      - run: npm run eval -- --check
       - run: bash -n install.sh
       - run: sudo apt-get update && sudo apt-get install -y shellcheck && shellcheck install.sh

@@ -20,6 +20,7 @@
   "scripts": {
     "test": "node --test \"**/*.test.ts\"",
     "eval": "node evals/run.ts",
+    "check:claims": "node scripts/check-claims.mjs",
     "typecheck": "npx --yes --package typescript@5 --package @types/node -- bash -c 'bin=$(command -v tsc); root=$(dirname \"$(dirname \"$bin\")\"); tsc --noEmit -p tsconfig.json --typeRoots \"$root/@types\"'"
   },
   "engines": {
