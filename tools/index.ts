@@ -19,6 +19,7 @@ import {
   type VerifyOptions,
   type VerifyResult,
 } from "./operations.ts"
+import { guardVerifyCommand, validateDiffBase } from "./guards.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -370,6 +371,25 @@ const plugin: PluginPlugin = {
             }
             return { content: JSON.stringify(failure) }
           }
+          // The tokenizing guard runs before the permission assertion and
+          // before anything is spawned: a denied command is refused outright,
+          // so the tool's shell can never be used to bypass the edit and shell
+          // denies the agent definitions ship. The verdict is structured
+          // output, not a throw, so the caller sees the reason.
+          const verdict = guardVerifyCommand(command)
+          if (!verdict.ok) {
+            const refusal: VerifyResult = {
+              command,
+              exitCode: -1,
+              ok: false,
+              reason: "denied-pattern",
+              stdout: "",
+              stderr: `The acceptance command was refused by the verify guard before it ran: ${verdict.reason}. This tool runs a shell and does not bypass the shell rules the agent definitions ship.`,
+              cwd: location,
+              durationMs: 0,
+            }
+            return { content: JSON.stringify(refusal) }
+          }
           // The check runs before anything is spawned, so a denied rule stops
           // the command rather than reporting its exit code. A rejection is
           // rethrown, not turned into output: the model should see the denial.
@@ -455,7 +475,18 @@ const plugin: PluginPlugin = {
               DIFF_OUTPUT_MAX,
             ),
           }
-          if (typeof base === "string" && base.trim()) options.base = base.trim()
+          if (typeof base === "string" && base.trim()) {
+            const trimmed = base.trim()
+            // The base reaches the VCS service as a git ref. It is untrusted
+            // tool input: absolute paths, `..` traversal and option-like
+            // prefixes are refused here with a stated reason rather than
+            // passed through to git.
+            const baseError = validateDiffBase(trimmed)
+            if (baseError) {
+              return { content: JSON.stringify({ error: `invalid base: ${baseError}` }) }
+            }
+            options.base = trimmed
+          }
 
           try {
             // The signal is forwarded, so a cancelled call stops the service
