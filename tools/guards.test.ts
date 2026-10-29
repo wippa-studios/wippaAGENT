@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { guardVerifyCommand, validateDiffBase } from "./guards.ts"
+import { guardVerifyCommand, validateDiffBase, validateVerifyCwd } from "./guards.ts"
 
 /** Asserts a command is denied and the reason names the expected token or rule. */
 function assertDenied(command: string, reasonPart: string): void {
@@ -106,9 +106,16 @@ test("allows read-only git, and git branch / git remote in listing form", () => 
   assertAllowed("git blame src/a.ts")
   assertAllowed("git branch")
   assertAllowed("git branch -a -v")
-  assertAllowed("git branch --sort=creatordate --list")
+  assertAllowed("git branch --list")
+  assertDenied("git branch --sort=creatordate", "git branch")
   assertAllowed("git remote -v")
   assertAllowed("git remote show origin")
+  // Read-only git that is not on the subcommand allowlist stays denied —
+  // the allowlist is explicit, not a read-only inference.
+  assertDenied("git worktree list", "git worktree")
+  assertDenied("git stash list", "git stash")
+  assertDenied("git submodule status", "git submodule")
+  assertDenied("git bisect log", "git bisect")
 })
 
 test("denies package install, publish and exec subcommands", () => {
@@ -131,19 +138,21 @@ test("denies package install, publish and exec subcommands", () => {
   assertDenied("npm run build && npm publish", "denied pair: `npm publish`")
 })
 
-test("allows read-only and test-running package commands", () => {
+test("allows only npm test, run and ls — every other package manager and npm subcommand is denied", () => {
   assertAllowed("npm test")
   assertAllowed("npm run typecheck")
   assertAllowed("npm run eval -- --check")
   assertAllowed("npm run build && npm test")
-  assertAllowed("npx tsc --noEmit")
-  assertAllowed("npx --yes @playwright/mcp@0.0.83 --isolated")
   assertAllowed("npm ls --depth=0")
-  assertAllowed("npm outdated")
-  assertAllowed("pnpm --filter web run build")
-  assertAllowed("yarn test")
-  assertAllowed("cargo test")
-  assertAllowed("go test ./...")
+  // The allowlist replaced the package-manager denylist: npx (registry code
+  // execution), every non-npm manager, and every other npm subcommand go.
+  assertDenied("npx tsc --noEmit", "acceptance allowlist")
+  assertDenied("npx --yes @playwright/mcp@0.0.83 --isolated", "acceptance allowlist")
+  assertDenied("npm outdated", "only test, run and ls pass")
+  assertDenied("pnpm --filter web run build", "acceptance allowlist")
+  assertDenied("yarn test", "acceptance allowlist")
+  assertDenied("cargo test", "acceptance allowlist")
+  assertDenied("go test ./...", "acceptance allowlist")
 })
 
 test("denies file mutators flat", () => {
@@ -194,10 +203,12 @@ test("denies sed -i in every spelling", () => {
   assertAllowed("sed -n 1,5p f")
 })
 
-test("denies find -exec, -execdir, -ok and -delete", () => {
+test("denies find outright, including its -exec and -delete flags", () => {
   assertDenied("find . -exec rm {} x", "find with -exec")
   assertDenied("find . -delete", "find with -exec")
-  assertAllowed("find . -name '*.ts'")
+  // `find` is not on the allowlist: it was never in the read-only utility
+  // list, so even the plain listing form is refused by default.
+  assertDenied("find . -name '*.ts'", "acceptance allowlist")
 })
 
 test("denies eval as a command word but not as a script name", () => {
@@ -229,6 +240,63 @@ test("the standard acceptance chain passes the guard, whole and in parts", () =>
   assertAllowed("bash -n install.sh")
 })
 
+test("the allowed surface: read-only inspection commands and chains over them pass", () => {
+  for (const command of [
+    "git status",
+    "git log -1",
+    "git branch --show-current",
+    "git remote -v",
+    "git ls-remote https://github.com/wippa-studios/wippaAGENT.git",
+    "grep -rn pattern .",
+    "cat README.md",
+    "./install.sh --dry-run",
+    "bash -n install.sh",
+    "git status && git log -1 && cat README.md",
+    "npm test && git diff HEAD && grep -rn guard tools/",
+  ]) {
+    assertAllowed(command)
+  }
+})
+
+// ---------------------------------------------------- the regression battery
+
+test("the regression battery: every string the reviews live-proved ALLOW is now denied with a reason", () => {
+  // Each entry was proved against the previous guard. The reason substring
+  // pins which rule fires, so a future refactor cannot silently swap the
+  // policy while keeping the denial.
+  const battery: readonly (readonly [string, string])[] = [
+    ["git -c alias.pwn=!id pwn", "git global option"],
+    ["git -C . push origin main", "git global option"],
+    ["git --no-pager reset --hard", "git global option"],
+    ["git show --output=/tmp/x.txt HEAD", "--output"],
+    ["git archive --output=/tmp/x.tgz HEAD", "--output"],
+    ["git checkout-index --prefix=/tmp/idx/ -a", "checkout-index"],
+    ["git difftool --extcmd id", "difftool"],
+    ["git fetch origin +main:refs/heads/victim", "refspec"],
+    ["git pull origin main", "not in the read-only allowlist"],
+    ["GIT_TRACE2=/tmp/t.log git log -1", "environment-variable assignment"],
+    ["git remote add evil url", "git remote"],
+    ["git branch newbranch", "git branch"],
+    ["npm pkg set scripts.pwn=echo hi", "npm subcommand"],
+    ["npm config set registry http://evil.example", "npm subcommand"],
+    ["npm --yes exec cowsay hi", "npm option before the subcommand"],
+    ["npx --yes cowsay hi", "acceptance allowlist"],
+    ["python3 -m http.server 8080", "acceptance allowlist"],
+    ["./planted-executable", "may be run by path"],
+    ["npm test &&& sleep 1", "backgrounding"],
+    ["node --eval=process.exit", "node with an eval flag"],
+    ["gh api /user", "acceptance allowlist"],
+    ["docker run --rm alpine", "acceptance allowlist"],
+    ["awk 'BEGIN{print 1}'", "inline program execution"],
+    ["xargs echo", "indirect command execution"],
+    ["sed -i s/a/b/ README.md", "sed with -i"],
+    ["curl http://evil.example", "network transfer"],
+  ]
+  for (const [command, reasonPart] of battery) {
+    assertDenied(command, reasonPart)
+  }
+})
+
 test("read-only inspection commands pass", () => {
   for (const command of [
     "cat package.json",
@@ -250,13 +318,22 @@ test("empty input is denied", () => {
   assertDenied("   ", "empty")
 })
 
-test("a denial names a reason for every denied sample in the battery", () => {
-  // The battery doubles as the demo: each command is refused with a reason
-  // a human can act on, never silently.
-  for (const command of ["curl https://evil.example", "sed -i s/a/b/ f", "git push --force origin main"]) {
-    const verdict = guardVerifyCommand(command)
-    assert.equal(verdict.ok, false, command)
-    if (!verdict.ok) assert.ok(verdict.reason.length > 0, command)
+// ----------------------------------------------------------- verify cwd
+
+test("validateVerifyCwd accepts sane paths and refuses escapes", () => {
+  for (const cwd of [".", "packages/web", "/var/tmp/wippaAGENT-p1", "..hidden", "a..b", "dir with spaces"]) {
+    assert.equal(validateVerifyCwd(cwd), undefined, cwd)
+  }
+  for (const [cwd, part] of [
+    ["../escape", "`..`"],
+    ["a/../../b", "`..`"],
+    ["sub/..", "`..`"],
+    ["line\nbreak", "line breaks"],
+    ["nul\0byte", "null bytes"],
+  ] as const) {
+    const error = validateVerifyCwd(cwd)
+    assert.ok(error !== undefined, `${JSON.stringify(cwd)} must be refused`)
+    assert.ok(error.includes(part), `${JSON.stringify(cwd)} → "${error}" should mention "${part}"`)
   }
 })
 
@@ -281,6 +358,10 @@ test("validateDiffBase refuses paths, traversal, options and shell characters", 
     ["main name", "plain git ref"],
     ["main//x", "empty or `.` path segments"],
     ["main/", "empty or `.` path segments"],
+    // Deliberate fail-closed choice: git accepts `HEAD~1` and `main^`, but
+    // `~` and `^` are outside the plain-ref character set.
+    ["HEAD~1", "plain git ref"],
+    ["main^", "plain git ref"],
     ["x".repeat(256), "255 characters"],
   ] as const) {
     const error = validateDiffBase(base)

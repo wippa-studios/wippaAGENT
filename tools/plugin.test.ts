@@ -396,6 +396,24 @@ test("verify rejects a bad command without spawning anything", async () => {
   }
 })
 
+test("verify refuses a cwd that escapes the location or is not a sane path", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const bad of ["../escape", "a/../../b", "line\nbreak", "nul\0byte"]) {
+    const result = JSON.parse(await runTool(host, "verify", { command: "echo hi", cwd: bad }))
+    assert.equal(result.ok, false, `${JSON.stringify(bad)} is refused`)
+    assert.equal(result.exitCode, -1)
+    assert.equal(result.reason, "invalid-cwd")
+    assert.match(result.stderr, /working directory was refused/)
+    assert.equal(result.cwd, root)
+  }
+
+  // The refusal happens before the guard and before the permission call.
+  assert.equal(host.permissionCalls.length, 0)
+})
+
 test("verify passes timeoutMs through to the command", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)

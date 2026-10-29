@@ -299,15 +299,10 @@ export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
  *
  * `wippa_verify` spawns a shell, so without this a subagent could run through
  * the tool exactly what its frontmatter denies to `shell`, and a host with no
- * permission rules configured would have no guard at all. The verdict comes
- * from `guardVerifyCommand`, the tokenizing guard in `guards.ts`: it denies
- * substitution, expansion, redirection, pipes, separators and line breaks
- * anywhere in the command, allows only `&&` chains, scans every word of every
- * segment against a denylist of dangerous commands (flat and inside quotes),
- * denies interpreter-plus-eval-flag pairs, and runs `install.sh` only with
- * `--dry-run`. Read-only commands and test runners pass. The tool entry point
- * in `index.ts` consults the same guard before the permission assertion, so a
- * denied command is refused before anything is spawned; this check is the
+ * permission rules configured would have no guard at all. The policy itself —
+ * the allowlist and the character policy — is `guardVerifyCommand` in
+ * `guards.ts`, the single source; the tool entry point in `index.ts` consults
+ * the same guard before the permission assertion, so this check is the
  * backstop for direct calls to `verify`.
  */
 export function deniedPattern(command: string): string | undefined {
@@ -322,9 +317,10 @@ export interface VerifyResult {
   ok: boolean
   /**
    * Why the command produced no normal exit code: `invalid-command`,
-   * `denied-pattern`, `aborted`, `timeout`, `output-limit`, `spawn-error` or
-   * `cwd-not-found`. Absent when the command ran to a verdict, including a
-   * non-zero exit code, which is reported through `exitCode`.
+   * `invalid-cwd`, `denied-pattern`, `aborted`, `timeout`, `output-limit`,
+   * `spawn-error` or `cwd-not-found`. Absent when the command ran to a
+   * verdict, including a non-zero exit code, which is reported through
+   * `exitCode`.
    */
   reason?: string
   stdout: string

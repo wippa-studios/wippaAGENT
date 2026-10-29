@@ -19,7 +19,7 @@ import {
   type VerifyOptions,
   type VerifyResult,
 } from "./operations.ts"
-import { guardVerifyCommand, validateDiffBase } from "./guards.ts"
+import { guardVerifyCommand, validateDiffBase, validateVerifyCwd } from "./guards.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -371,11 +371,30 @@ const plugin: PluginPlugin = {
             }
             return { content: JSON.stringify(failure) }
           }
-          // The tokenizing guard runs before the permission assertion and
-          // before anything is spawned: a denied command is refused outright,
-          // so the tool's shell can never be used to bypass the edit and shell
-          // denies the agent definitions ship. The verdict is structured
-          // output, not a throw, so the caller sees the reason.
+          // The working directory is untrusted tool input as well: a `..`
+          // segment would resolve outside the location, and line breaks or
+          // null bytes are never legitimate in a path. Refused here with a
+          // stated reason, before the guard and before the permission call.
+          if (typeof cwd === "string" && cwd.trim().length > 0) {
+            const cwdError = validateVerifyCwd(cwd)
+            if (cwdError) {
+              const refusal: VerifyResult = {
+                command,
+                exitCode: -1,
+                ok: false,
+                reason: "invalid-cwd",
+                stdout: "",
+                stderr: `The working directory was refused: ${cwdError}.`,
+                cwd: location,
+                durationMs: 0,
+              }
+              return { content: JSON.stringify(refusal) }
+            }
+          }
+          // The guard (allowlist plus character policy, defined in
+          // guards.ts) runs before the permission assertion and before any
+          // spawn; the verdict is structured output, not a throw, so the
+          // caller sees the reason.
           const verdict = guardVerifyCommand(command)
           if (!verdict.ok) {
             const refusal: VerifyResult = {

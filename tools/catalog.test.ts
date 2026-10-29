@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -765,7 +766,7 @@ test("deniedPattern leaves ordinary acceptance commands alone", () => {
     "git log --oneline -5",
     "git diff HEAD",
     "cat package.json",
-    "pnpm --filter web run build",
+    "npm ls --depth=0",
     "./install.sh --dry-run",
     "bash -n install.sh",
   ]) {
@@ -854,11 +855,24 @@ test("verify does not start a command when the signal is already aborted", async
   const controller = new AbortController()
   controller.abort()
 
-  const result = await verify({ command: "sleep 5", signal: controller.signal })
+  // The fixture script would write a file if it ever ran; the filesystem is
+  // the assertion that nothing was spawned.
+  const dir = tempDir()
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      private: true,
+      scripts: { "make-marker": "node -e 'require(\"node:fs\").writeFileSync(\"made.txt\", \"x\")'" },
+    }),
+  )
+
+  const result = await verify({ command: "npm run make-marker", cwd: dir, signal: controller.signal })
 
   assert.equal(result.ok, false)
   assert.equal(result.reason, "aborted")
   assert.equal(result.durationMs, 0, "the command never started, so it ran for zero milliseconds")
+  assert.equal(existsSync(join(dir, "made.txt")), false, "nothing was spawned, so no file was written")
 })
 
 test("verify reports how long the command ran", async () => {
