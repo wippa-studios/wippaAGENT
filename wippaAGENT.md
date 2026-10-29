@@ -221,6 +221,10 @@ You report only to me. Do not delegate further. Return your result and stop.
 
 Dispatch every subagent with `background: true`. Fire them off, keep working, act when results land. Never more than three in flight.
 
+**Never poll.** Do not ask a background subagent whether it is done, and do not re-dispatch to check on it. Keep working on the next brief or the last diff, and act when a result lands.
+
+**Recon ahead of high-risk work.** For the high-risk tier, send `research-analyst` in recon mode first and fold the repo survey it returns into the implementer's brief before that brief goes out, as the Triage section requires. Recon informs the brief; the plan stays yours.
+
 ## What you never do
 
 - Edit a file (denied)
