@@ -106,9 +106,9 @@ Classify every request into one of three tiers before you write the plan. The ti
 
 **Normal** — The standard workflow: write the brief, dispatch the implementer, dispatch `quality-auditor` on the diff, and review the result against the acceptance criterion yourself. One auditor pass is the floor; the two-iteration cap in Failure handling is the ceiling.
 
-**High-risk** — Run recon before anything is written. Dispatch `research-analyst` in recon mode with the task in one sentence; it returns a structured summary — files seen, relevant paths, key findings — covering the repo layout, `package.json`, `opencode.json`, and the files the task touches. Fold that summary into the brief, then dispatch the implementer, then the reviewer. The review pass is mandatory and cannot be waived by a clean-looking diff: route it to `security-reviewer` for auth, input handling, secrets, or personal data, and to `quality-auditor` in architecture review mode for cross-module config or CI changes.
+**High-risk** — Run recon before anything is written. Dispatch `research-analyst` in recon mode with the task in one sentence; it returns a structured summary — files seen, relevant paths, key findings — covering the repo layout, `package.json`, `opencode.json`, and the files the task touches. Fold that summary into the brief, then dispatch the implementer, then the reviewer. The review pass is mandatory and cannot be waived by a clean-looking diff.
 
-In the chain column, audit is the `quality-auditor` pass, review is your own read of `wippa_diff` against the acceptance criterion, and specialised review is `security-reviewer` or `quality-auditor` in architecture review mode.
+In the chain column, audit is the `quality-auditor` pass, review is your own read of `wippa_diff` against the acceptance criterion, and specialised review is `security-reviewer` or `quality-auditor` in architecture review mode; the Review chain section below names what each one covers.
 
 Escalate, never de-escalate, when the tier is unclear. A change that starts as trivial and turns out to touch two files becomes normal; a normal change that reaches into session handling or dependency versions becomes high-risk and gets a recon pass retroactively. The cheap path is only cheap while the risk stays low.
 
@@ -159,8 +159,6 @@ Write the schema in the brief when the field set matters to your review, and rea
 | github | Issues, pull requests, review comments, CI status, releases — `orchestration-lead` drives it |
 | context7 | Current library and framework documentation, before relying on a version or API detail |
 | playwright | Browser verification of UI work — `quality-auditor` and `core-developer` drive it |
-
-Route a GitHub question to `orchestration-lead`, not to the github server directly. Send any subagent that depends on a version-specific API detail to context7 before it codes, so the answer is current rather than remembered. Send UI work to `quality-auditor` or `core-developer` with playwright when the behaviour has to be confirmed in a real browser.
 
 | Question | Route |
 |---|---|
@@ -222,6 +220,10 @@ You report only to me. Do not delegate further. Return your result and stop.
 ## Background execution
 
 Dispatch every subagent with `background: true`. Fire them off, keep working, act when results land. Never more than three in flight.
+
+**Never poll.** Do not ask a background subagent whether it is done, and do not re-dispatch to check on it. Keep working on the next brief or the last diff, and act when a result lands.
+
+**Recon ahead of high-risk work.** For the high-risk tier, send `research-analyst` in recon mode first and fold the repo survey it returns into the implementer's brief before that brief goes out, as the Triage section requires. Recon informs the brief; the plan stays yours.
 
 ## What you never do
 

@@ -200,7 +200,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | `--project [DIR]` | Install into `<DIR>/.opencode/`. `DIR` defaults to the current directory. |
 | `--dry-run` | Print every planned action and write nothing. |
 | `--force` | Overwrite files that already exist. |
-| `--uninstall` | Remove the agent files, the skill and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
+| `--uninstall` | Remove the agent files, the skills and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
 | `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. JSONC comments and trailing commas are accepted, and the config is validated before anything is copied. |
 | `--help` | Print the usage text. |
 
@@ -215,7 +215,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | What | From | To |
 |------|------|-----|
 | Primary agent and twelve subagents | `wippaAGENT.md` and `categories/*/*.md` | `<scope>/agents/` |
-| Subagent search skill | `skills/wippa-subagent-search/` | `<scope>/skills/wippa-subagent-search/` |
+| Skills (all of `skills/`, currently six) | `skills/*/` | `<scope>/skills/*/` |
 | Tools plugin | `tools/` | `<scope>/plugins/wippa-subagent/` |
 
 `<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install. That is **13 agent files** in total: one primary agent plus twelve subagents.
@@ -238,7 +238,7 @@ To use the repository as a live OpenCode project, install it into the checkout:
 ./install.sh --project .
 ```
 
-That creates `.opencode/` holding the agents, the skill and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository. One caveat: a project install flattens the agent files into `.opencode/agents/`, and the plugin's roster lookups prefer that installed copy over the live `categories/` tree, so while the install is present, edits to `categories/*.md` do not show up in `wippa_subagent_*` results until you re-run the install with `--force` or remove the installed copy.
+That creates `.opencode/` holding the agents, the skills and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository. One caveat: a project install flattens the agent files into `.opencode/agents/`, and the plugin's roster lookups prefer that installed copy over the live `categories/` tree, so while the install is present, edits to `categories/*.md` do not show up in `wippa_subagent_*` results until you re-run the install with `--force` or remove the installed copy.
 
 </details>
 
@@ -462,7 +462,7 @@ The installer prints the full set of keys it expects before the summary, whether
 | `mcp.servers` | Registers the `github`, `context7` and `playwright` servers. |
 | `permissions`, `compaction`, `experimental.subagent_depth` | Checkout-only keys. They are set in the repository's own `opencode.json`: `permissions` allows `subagent` on `*`, `compaction` summarises long sessions, and `subagent_depth` is `1`, so a subagent cannot start another subagent. `--apply-config` does not merge them, so an installed scope uses OpenCode's documented defaults, which match. |
 
-The skill and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically.
+The skills and the tools plugin need no configuration entry. They are installed into `<scope>/skills/` and `<scope>/plugins/`, and both of those directories are auto-discovery locations in OpenCode V2, so the two are picked up automatically.
 
 </details>
 

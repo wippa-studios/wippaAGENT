@@ -57,6 +57,17 @@ function sourceAgentCount(): number {
   return count
 }
 
+/** Every skill directory the installer must ship, i.e. each one holding a SKILL.md. */
+function sourceSkillNames(): string[] {
+  const skillsDir = join(REPO_ROOT, "skills")
+  return readdirSync(skillsDir, { withFileTypes: true })
+    .filter(
+      (entry) => entry.isDirectory() && existsSync(join(skillsDir, entry.name, "SKILL.md")),
+    )
+    .map((entry) => entry.name)
+    .sort()
+}
+
 function writeConfig(dir: string, content: string): string {
   const target = join(dir, ".opencode")
   mkdirSync(target, { recursive: true })
@@ -65,7 +76,7 @@ function writeConfig(dir: string, content: string): string {
   return path
 }
 
-test("a fresh project install writes the agents, the skill and the plugin", () => {
+test("a fresh project install writes the agents, every skill and the plugin", () => {
   const dir = projectDir()
   const result = runInstaller("--project", dir)
 
@@ -74,9 +85,17 @@ test("a fresh project install writes the agents, the skill and the plugin", () =
   const agents = readdirSync(join(target, "agents")).filter((name) => name.endsWith(".md"))
   assert.equal(agents.length, sourceAgentCount())
   assert.ok(agents.includes("wippaAGENT.md"))
-  assert.ok(existsSync(join(target, "skills", "wippa-subagent-search", "SKILL.md")))
+  const skills = sourceSkillNames()
+  assert.ok(skills.length > 0, "the source checkout must ship at least one skill")
+  for (const skill of skills) {
+    assert.ok(
+      existsSync(join(target, "skills", skill, "SKILL.md")),
+      `skill "${skill}" must be installed under <scope>/skills/`,
+    )
+  }
   assert.ok(existsSync(join(target, "plugins", "wippa-subagent", "index.ts")))
   assert.match(result.output, new RegExp(`agents written\\s+: ${sourceAgentCount()}`))
+  assert.match(result.output, new RegExp(`skills written\\s+: ${skills.length}`))
 })
 
 test("test files never reach an installed scope", () => {
@@ -135,7 +154,12 @@ test("uninstall removes the installed files and keeps a modified one", () => {
   assert.equal(result.status, 0, result.output)
   assert.equal(readFileSync(modified, "utf8"), "locally edited\n")
   assert.ok(!existsSync(join(target, "agents", "core-developer.md")))
-  assert.ok(!existsSync(join(target, "skills", "wippa-subagent-search", "SKILL.md")))
+  for (const skill of sourceSkillNames()) {
+    assert.ok(
+      !existsSync(join(target, "skills", skill, "SKILL.md")),
+      `skill "${skill}" must be removed from <scope>/skills/ on uninstall`,
+    )
+  }
   assert.ok(!existsSync(join(target, "plugins", "wippa-subagent", "index.ts")))
   assert.match(result.output, /files kept\s+: 1/)
 })

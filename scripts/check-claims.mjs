@@ -213,6 +213,69 @@ if (readme.includes("5 Plugin tools")) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. The installer ships every skill directory, not a hardcoded subset. The
+//    copy path is a glob loop over skills/*/; if that loop is ever replaced by
+//    an explicit list, every skill directory must still appear in the copy and
+//    remove calls, so a newly added skill can never be silently left out.
+// ---------------------------------------------------------------------------
+const SKILLS_LOOP = 'for src in "$SCRIPT_DIR"/skills/*/; do'
+const skillNames = (() => {
+  const dir = join(ROOT, "skills")
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "SKILL.md")))
+    .map((entry) => entry.name)
+    .sort()
+})()
+const hasSkillsLoop = installSh.split(SKILLS_LOOP).length - 1 >= 2 // install path + uninstall path
+const hasSkillCopy = installSh.includes('copy_tree "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"')
+const hasSkillRemove = installSh.includes(
+  'remove_tree_files "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"',
+)
+if (skillNames.length === 0) {
+  fail("skills/: no skill directories with a SKILL.md found — assertion 8 expects at least one")
+} else if (!hasSkillsLoop) {
+  fail(
+    `install.sh: no "${SKILLS_LOOP}" loop found on both the install and uninstall paths — ` +
+      `the installer would ship a hardcoded subset, leaving ${skillNames.join(", ")} out`,
+  )
+} else if (!hasSkillCopy) {
+  fail('install.sh: the skills loop does not copy_tree "$SCRIPT_DIR/skills/$name" → "$SKILLS_DIR/$name"')
+} else if (!hasSkillRemove) {
+  fail(
+    'install.sh: --uninstall does not remove_tree_files "$SCRIPT_DIR/skills/$name" from "$SKILLS_DIR/$name"',
+  )
+} else {
+  pass(`install.sh installs and uninstalls all ${skillNames.length} skills via a skills/*/ loop`)
+}
+
+// ---------------------------------------------------------------------------
+// 9. Every "skill `X`" pointer in the agent definitions resolves to a real
+//    SKILL.md, so a pointer can never point at a skill that is absent from
+//    skills/ (and therefore absent from every installed scope).
+// ---------------------------------------------------------------------------
+const pointerFiles = ["wippaAGENT.md"]
+for (const dir of readdirSync(join(ROOT, "categories"), { withFileTypes: true })) {
+  if (!dir.isDirectory()) continue
+  for (const file of readdirSync(join(ROOT, "categories", dir.name))) {
+    if (file.endsWith(".md")) pointerFiles.push(join("categories", dir.name, file))
+  }
+}
+let dangling = 0
+for (const rel of pointerFiles) {
+  for (const match of read(rel).matchAll(/skill `([^`]+)`/g)) {
+    const target = join(ROOT, "skills", match[1], "SKILL.md")
+    if (!existsSync(target)) {
+      dangling++
+      fail(`${rel}: pointer to skill \`${match[1]}\` — no skills/${match[1]}/SKILL.md exists`)
+    }
+  }
+}
+if (dangling === 0) {
+  pass(`every "skill \`X\`" pointer in wippaAGENT.md and categories/*/*.md resolves to a SKILL.md`)
+}
+
+// ---------------------------------------------------------------------------
 if (failures > 0) {
   console.error(`\ncheck:claims failed — ${failures} problem${failures === 1 ? "" : "s"}`)
   process.exit(1)
