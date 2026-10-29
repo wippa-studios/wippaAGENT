@@ -23,7 +23,7 @@ function scenarioText(overrides: Overrides = {}): string {
   const fields: Record<string, string> = {
     Scenario: "99-probe",
     Intent: "Probe the parser.",
-    "Expected primary agent": "agentWIPPA",
+    "Expected primary agent": "wippaAGENT",
     "Expected subagent(s)": "- `core-developer` — implementation",
     "Acceptance criteria": "- The command passes.",
     "Acceptance command": "- `npm test`",
@@ -68,7 +68,7 @@ test("the parser reads backticked ids and ignores the routing prose after them",
   )
 
   assert.deepEqual(scenario.problems, [])
-  assert.equal(scenario.primary, "agentWIPPA")
+  assert.equal(scenario.primary, "wippaAGENT")
   assert.deepEqual(scenario.subagents, ["security-reviewer", "core-developer"])
   assert.equal(scenario.command, "npm test")
 })

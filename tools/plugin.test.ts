@@ -181,7 +181,7 @@ async function runTool(
   assert.ok(tool, `${name} is registered`)
   const result = await tool.execute(input, {
     sessionID: "ses_test",
-    agent: "agentWIPPA",
+    agent: "wippaAGENT",
     messageID: "msg_test",
     id: "call_test",
     signal,
@@ -220,7 +220,7 @@ function probeFixture(rosterBeside = false): { root: string; agents: string; ros
   writeFileSync(join(agents, "probe-beta.md"), probeAgent("Beta probe agent."))
   writeFileSync(join(agents, "probe-gamma.md"), probeAgent("Gamma probe agent."))
 
-  const roster = rosterBeside ? join(root, "agentWIPPA.md") : join(agents, "agentWIPPA.md")
+  const roster = rosterBeside ? join(root, "wippaAGENT.md") : join(agents, "wippaAGENT.md")
   writeFileSync(roster, probeRoster("Probe Group"))
   return { root, agents, roster }
 }
@@ -443,7 +443,7 @@ test("verify asks the session's permissions before it spawns anything", async ()
   assert.equal(call.action, "verify")
   assert.deepEqual(call.resources, ["echo permitted"])
   assert.equal(call.sessionID, "ses_test")
-  assert.equal(call.agent, "agentWIPPA")
+  assert.equal(call.agent, "wippaAGENT")
   assert.deepEqual(call.source, { type: "tool", messageID: "msg_test", id: "call_test" })
   assert.equal(JSON.parse(content).ok, true)
 })

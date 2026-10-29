@@ -47,9 +47,9 @@ export interface RosterCategory {
 
 // The repository keeps its agents in a tree of category directories.
 const BUNDLE_CATEGORIES_DIR = fileURLToPath(new URL("../categories/", import.meta.url))
-// The roster lives at the repository root as `agentWIPPA.md`; an installed
+// The roster lives at the repository root as `wippaAGENT.md`; an installed
 // scope keeps a copy of it beside the agent files.
-const ROSTER_FILENAME = "agentWIPPA.md"
+const ROSTER_FILENAME = "wippaAGENT.md"
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 // Directories that never hold agent definitions.
 const SKIPPED_WALK_DIRS = new Set(["node_modules", ".git", "docs", "skills"])
@@ -442,7 +442,7 @@ function rosterSource(source: string): string {
 }
 
 /**
- * Finds the roster. In the repository it is the root `agentWIPPA.md`, next to
+ * Finds the roster. In the repository it is the root `wippaAGENT.md`, next to
  * the `categories/` tree; in an installed scope it is the copy beside the
  * agent files.
  */

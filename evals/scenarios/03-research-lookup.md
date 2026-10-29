@@ -10,7 +10,7 @@ Research a library framework feature.
 
 ## Expected primary agent
 
-agentWIPPA
+wippaAGENT
 
 ## Expected subagent(s)
 

@@ -8,7 +8,7 @@ exploit details in a public issue.
 
 ## Scope
 
-The agent definitions under `categories/` and `agentWIPPA.md`, the tools plugin
+The agent definitions under `categories/` and `wippaAGENT.md`, the tools plugin
 under `tools/`, and `install.sh`.
 
 ## Expected behaviour you should know
