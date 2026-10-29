@@ -2,7 +2,7 @@
 #
 # install.sh - install the wippaAGENT agent set into OpenCode.
 #
-# The installer copies the agent definitions, the subagent search skill and the
+# The installer copies the agent definitions, every skill under skills/ and the
 # tools plugin into an OpenCode configuration directory. It never removes or
 # overwrites anything it did not put there, unless --force is given.
 #
@@ -18,7 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
 REPOSITORY="wippa-studios/wippaAGENT"
 PRIMARY_AGENT_FILE="wippaAGENT.md"
-SKILL_NAME="wippa-subagent-search"
 PLUGIN_NAME="wippa-subagent"
 
 SCOPE="global"
@@ -48,7 +47,7 @@ Scope:
 Options:
   --dry-run           Print every planned action and write nothing
   --force             Overwrite files that already exist
-  --uninstall         Remove the agent files, the skill and the plugin this
+  --uninstall         Remove the agent files, the skills and the plugin this
                       installer placed in the target
   --apply-config      Merge the required keys into the target opencode.json
                       (JSON or JSONC) without changing values that are already
@@ -303,7 +302,7 @@ prune_empty_dirs() {
 }
 
 print_config_keys() {
-  # No "skills" or "plugins" entries are printed here. The skill is installed
+  # No "skills" or "plugins" entries are printed here. The skills are installed
   # into <scope>/skills/ and the tools plugin into <scope>/plugins/, and both
   # of those directories are auto-discovery locations in OpenCode V2, so the
   # two are found without any configuration key. A relative path in those
@@ -525,7 +524,7 @@ if (added.length === 0) {
   process.exit(0);
 }
 
-// No "skills" or "plugins" key is written here. The skill is installed into
+// No "skills" or "plugins" key is written here. The skills are installed into
 // <scope>/skills/ and the tools plugin into <scope>/plugins/, and both of
 // those directories are auto-discovery locations in OpenCode V2, so the two
 // are found without any configuration key. A relative path in those arrays
@@ -643,11 +642,14 @@ if [ "$UNINSTALL" -eq 1 ]; then
     fi
   done
 
-  step "Skill"
-  if [ -d "$SCRIPT_DIR/skills/$SKILL_NAME" ]; then
-    remove_tree_files "$SCRIPT_DIR/skills/$SKILL_NAME" "$SKILLS_DIR/$SKILL_NAME"
-    prune_empty_dirs "$SKILLS_DIR/$SKILL_NAME"
-  fi
+  step "Skills"
+  for src in "$SCRIPT_DIR"/skills/*/; do
+    [ -d "$src" ] || continue
+    name="${src%/}"
+    name="${name##*/}"
+    remove_tree_files "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"
+    prune_empty_dirs "$SKILLS_DIR/$name"
+  done
 
   step "Tools plugin"
   if [ -d "$SCRIPT_DIR/tools" ]; then
@@ -680,6 +682,12 @@ for src in "$SCRIPT_DIR"/categories/*/*.md; do
 done
 AGENT_TOTAL=$((AGENT_SOURCE_COUNT + 1))
 
+SKILL_SOURCE_COUNT=0
+for src in "$SCRIPT_DIR"/skills/*/; do
+  [ -d "$src" ] || continue
+  SKILL_SOURCE_COUNT=$((SKILL_SOURCE_COUNT + 1))
+done
+
 say "wippaAGENT installer"
 say "source   : $SCRIPT_DIR"
 say "target   : $TARGET_DIR"
@@ -707,15 +715,20 @@ done
 # over an installed scope reports zero rather than the total.
 AGENTS_INSTALLED=$((INSTALLED_FILES - AGENTS_BEFORE))
 
-step "2. Skill ($SKILL_NAME)"
-if [ -d "$SCRIPT_DIR/skills/$SKILL_NAME" ]; then
-  if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$SKILLS_DIR"
-  fi
-  copy_tree "$SCRIPT_DIR/skills/$SKILL_NAME" "$SKILLS_DIR/$SKILL_NAME"
-else
-  info "skipped    $SCRIPT_DIR/skills/$SKILL_NAME (not found in this checkout)"
+step "2. Skills ($SKILL_SOURCE_COUNT)"
+SKILLS_BEFORE=$INSTALLED_FILES
+if [ "$DRY_RUN" -eq 0 ] && [ "$SKILL_SOURCE_COUNT" -gt 0 ]; then
+  mkdir -p "$SKILLS_DIR"
 fi
+for src in "$SCRIPT_DIR"/skills/*/; do
+  [ -d "$src" ] || continue
+  name="${src%/}"
+  name="${name##*/}"
+  copy_tree "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"
+done
+# Only the skill files that were really written are counted, so a second run
+# over an installed scope reports zero rather than the total.
+SKILLS_INSTALLED=$((INSTALLED_FILES - SKILLS_BEFORE))
 
 step "3. Tools plugin ($PLUGIN_NAME)"
 if [ -d "$SCRIPT_DIR/tools" ]; then
@@ -738,8 +751,9 @@ fi
 step "Summary"
 say "  agents written      : $AGENTS_INSTALLED"
 say "  agent files total   : $AGENT_TOTAL"
-say "  skill installed    : $SKILL_NAME"
-say "  plugin installed   : $PLUGIN_NAME"
+say "  skills written      : $SKILLS_INSTALLED"
+say "  skills total        : $SKILL_SOURCE_COUNT"
+say "  plugin installed    : $PLUGIN_NAME"
 say "  files written      : $INSTALLED_FILES"
 say "  files skipped      : $SKIPPED_FILES"
 if [ "$DRY_RUN" -eq 1 ]; then
