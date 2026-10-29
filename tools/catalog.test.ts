@@ -29,7 +29,7 @@ import { deniedPattern, get, invalid, list, search, verify } from "./operations.
 
 const BUNDLE_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const CATEGORIES_DIR = join(BUNDLE_ROOT, "categories")
-const ROSTER_FILE = join(BUNDLE_ROOT, "agentWIPPA.md")
+const ROSTER_FILE = join(BUNDLE_ROOT, "wippaAGENT.md")
 const GLOBAL_CUSTOM_AGENTS = ["claim-skeptic", "ml-experimenter", "github"]
 
 function bundleCatalog(): Catalog {

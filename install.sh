@@ -7,7 +7,7 @@
 # overwrites anything it did not put there, unless --force is given.
 #
 # Source repository: https://github.com/wippa-studios/wippaAGENT
-# The file agentWIPPA.md is the primary agent definition. It is an agent id,
+# The file wippaAGENT.md is the primary agent definition. It is an agent id,
 # not the name of this repository.
 
 set -euo pipefail
@@ -16,7 +16,7 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
 REPOSITORY="wippa-studios/wippaAGENT"
-PRIMARY_AGENT_FILE="agentWIPPA.md"
+PRIMARY_AGENT_FILE="wippaAGENT.md"
 SKILL_NAME="wippa-subagent-search"
 PLUGIN_NAME="wippa-subagent"
 
@@ -310,7 +310,7 @@ print_config_keys() {
   # against the location of their config file.
   cat <<'JSON'
 {
-  "default_agent": "agentWIPPA",
+  "default_agent": "wippaAGENT",
   "agents": {
     "general": { "disabled": true },
     "explore": { "disabled": true },
@@ -474,7 +474,7 @@ function put(container, key, value, label) {
   added.push(label);
 }
 
-put(config, 'default_agent', 'agentWIPPA', 'default_agent');
+put(config, 'default_agent', 'wippaAGENT', 'default_agent');
 
 if (!Object.prototype.hasOwnProperty.call(config, 'agents') || config.agents === null) {
   config.agents = {};
@@ -747,7 +747,7 @@ fi
 say ""
 say "  Next steps:"
 say "  1. Restart OpenCode so the new roster is loaded."
-say "  2. Set \"default_agent\": \"agentWIPPA\" in $CONFIG_FILE"
+say "  2. Set \"default_agent\": \"wippaAGENT\" in $CONFIG_FILE"
 say "     (or re-run with --apply-config to merge the keys above)."
 say "  3. Export GITHUB_PERSONAL_ACCESS_TOKEN for the github MCP server."
 say "  4. Remove it again with: $0 --uninstall${PROJECT_DIR:+ --project $PROJECT_DIR}"

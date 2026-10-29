@@ -73,7 +73,7 @@ test("a fresh project install writes the agents, the skill and the plugin", () =
   const target = join(dir, ".opencode")
   const agents = readdirSync(join(target, "agents")).filter((name) => name.endsWith(".md"))
   assert.equal(agents.length, sourceAgentCount())
-  assert.ok(agents.includes("agentWIPPA.md"))
+  assert.ok(agents.includes("wippaAGENT.md"))
   assert.ok(existsSync(join(target, "skills", "wippa-subagent-search", "SKILL.md")))
   assert.ok(existsSync(join(target, "plugins", "wippa-subagent", "index.ts")))
   assert.match(result.output, new RegExp(`agents written\\s+: ${sourceAgentCount()}`))
@@ -196,7 +196,7 @@ test("--apply-config accepts JSONC comments and trailing commas", () => {
   assert.equal(config.theme, "dark")
   assert.equal(config.mcp.servers.local.command[0], "node", "an unrelated server is kept")
   assert.equal(config.mcp.servers.github.url, "https://api.githubcopilot.com/mcp/")
-  assert.equal(config.default_agent, "agentWIPPA")
+  assert.equal(config.default_agent, "wippaAGENT")
 
   // A second merge has nothing to add, so it leaves the file byte-identical
   // rather than rewriting it and losing the comments it just accepted.
@@ -210,7 +210,7 @@ test("--apply-config accepts JSONC comments and trailing commas", () => {
 
 test("an unreadable config stops the install before any agent is copied", () => {
   const dir = projectDir()
-  const broken = '{\n  "default_agent": "agentWIPPA",\n  broken\n}\n'
+  const broken = '{\n  "default_agent": "wippaAGENT",\n  broken\n}\n'
   const configPath = writeConfig(dir, broken)
 
   const result = runInstaller("--project", dir, "--apply-config")

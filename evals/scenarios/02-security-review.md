@@ -10,7 +10,7 @@ Review the handling of user input.
 
 ## Expected primary agent
 
-agentWIPPA
+wippaAGENT
 
 ## Expected subagent(s)
 

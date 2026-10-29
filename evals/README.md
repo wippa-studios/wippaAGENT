@@ -10,7 +10,7 @@ A scenario carries six fields:
 
 - **Scenario name** — the short name of the behaviour under test, as used in the file name without the extension, for example `01-plain-bug-fix`.
 - **Intent** — the one-sentence user-visible outcome the run should produce.
-- **Expected primary agent** — the primary agent that owns the work, normally `agentWIPPA`.
+- **Expected primary agent** — the primary agent that owns the work, normally `wippaAGENT`.
 - **Expected subagent(s)** — the specialist or specialists that should be dispatched, with the capability each dispatch should be routed on. One task may legitimately need two; write one line per dispatch.
 - **Acceptance criteria** — the command or observable check that decides pass or fail. The acceptance command is mandatory whenever a command can decide the outcome; a scenario that reports `None` must name the artefact that stands as the evidence.
 - **Acceptance command** — the exact command that produces the evidence, or `None` where the outcome is the research report itself. It is mandatory whenever a command can decide the outcome.

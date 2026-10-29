@@ -38,18 +38,18 @@ Install once, point the config at the orchestrator, and every project gets the s
     <td align="center" width="25%"><h2>1</h2><b>Primary agent</b><br/><sub>Plans, delegates, verifies</sub></td>
     <td align="center" width="25%"><h2>12</h2><b>Subagents</b><br/><sub>Implementation and review</sub></td>
     <td align="center" width="25%"><h2>3</h2><b>MCP servers</b><br/><sub>GitHub, docs, browser</sub></td>
-    <td align="center" width="25%"><h2>5</h2><b>Plugin tools</b><br/><sub>Roster lookup and verification</sub></td>
+    <td align="center" width="25%"><h2>6</h2><b>Plugin tools</b><br/><sub>Roster lookup, verification and diff reading</sub></td>
   </tr>
 </table>
 
-wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup and an acceptance verifier.
+wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup, an acceptance verifier and diff reading.
 
 ### Why teams use it
 
 | | |
 |---|---|
 | **Predictable routing** | Every request is triaged into a tier, and the tier decides the chain. The choice is written into the plan, so routing is auditable. |
-| **Orchestrator can't cut corners** | `agentWIPPA` has edit and shell denied by design. It plans, delegates and verifies; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. |
+| **Orchestrator can't cut corners** | `wippaAGENT` has edit and shell denied by design. It plans, delegates and verifies; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. |
 | **Verdicts from exit codes** | Nothing is reported as done until the acceptance command has returned a zero exit code, and on Normal or High-risk work a reviewer has also seen the diff. |
 | **Plan survives the session** | The plan ledger lives on disk at `.opencode/PLAN.md`, and the next session reads it first. |
 | **Structured reports** | Every subagent returns the same fixed schema, so the orchestrator reviews fields rather than prose. |
@@ -74,7 +74,7 @@ Or add it by hand to your `opencode.json`:
 
 ```json
 {
-  "default_agent": "agentWIPPA"
+  "default_agent": "wippaAGENT"
 }
 ```
 
@@ -93,7 +93,7 @@ That's it. Every project you open now has the full roster.
 %% The ~~~ links at the end are layout-only and carry no meaning: they keep the roster
 %% in two rows and the server row below it. Roster cards list the agent ids in a category.
 flowchart TB
-    U([You]) --> O["<b>agentWIPPA</b><br/>plans · delegates · verifies<br/><i>no edit · no shell</i>"]
+    U([You]) --> O["<b>wippaAGENT</b><br/>plans · delegates · verifies<br/><i>no edit · no shell</i>"]
 
     L[".opencode/PLAN.md<br/>plan ledger"]
     V{{"wippa_verify<br/>exit code = verdict"}}
@@ -214,7 +214,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 
 | What | From | To |
 |------|------|-----|
-| Primary agent and twelve subagents | `agentWIPPA.md` and `categories/*/*.md` | `<scope>/agents/` |
+| Primary agent and twelve subagents | `wippaAGENT.md` and `categories/*/*.md` | `<scope>/agents/` |
 | Subagent search skill | `skills/wippa-subagent-search/` | `<scope>/skills/wippa-subagent-search/` |
 | Tools plugin | `tools/` | `<scope>/plugins/wippa-subagent/` |
 
@@ -230,7 +230,7 @@ Agent files are copied flat. The category directory is not preserved in the dest
 
 <br/>
 
-The `opencode.json` in this repository configures the checkout itself; it is not the key set the installer writes. `agentWIPPA.md` sits at the repository root, where OpenCode's agent discovery does not look, so a bare `opencode` run in a fresh clone finds no `agentWIPPA` and falls back to the default agent.
+The `opencode.json` in this repository configures the checkout itself; it is not the key set the installer writes. `wippaAGENT.md` sits at the repository root, where OpenCode's agent discovery does not look, so a bare `opencode` run in a fresh clone finds no `wippaAGENT` and falls back to the default agent.
 
 To use the repository as a live OpenCode project, install it into the checkout:
 
@@ -265,7 +265,7 @@ That creates `.opencode/` holding the agents, the skill and the tools plugin. Wi
 
 ## The primary agent
 
-**`agentWIPPA`** is the orchestrator. It never edits a file and holds no shell of its own; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. Both permissions are denied to it by design, so it cannot bypass the roster.
+**`wippaAGENT`** is the orchestrator. It never edits a file and holds no shell of its own; the one command it can trigger is the acceptance command, through the bounded `wippa_verify` tool. Both permissions are denied to it by design, so it cannot bypass the roster.
 
 What it does instead:
 
@@ -302,7 +302,7 @@ Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so 
 sequenceDiagram
     autonumber
     actor U as User
-    participant O as agentWIPPA
+    participant O as wippaAGENT
     participant S as Owning subagent
     participant QA as quality-auditor
     participant V as wippa_verify
@@ -372,7 +372,7 @@ Permissions are enforced by OpenCode rules, not by prompts. The orchestrator's e
 
 | Agent | edit | shell | verify | everything else |
 |-------|------|-------|--------|-----------------|
-| `agentWIPPA` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
+| `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
 | `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `quality-auditor` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
@@ -430,7 +430,7 @@ The agent set is inert until `default_agent` points at the orchestrator. Add it 
 
 ```json
 {
-  "default_agent": "agentWIPPA"
+  "default_agent": "wippaAGENT"
 }
 ```
 
@@ -443,7 +443,7 @@ The installer prints the full set of keys it expects before the summary, whether
 
 | Key | Purpose |
 |-----|---------|
-| `default_agent` | Makes `agentWIPPA` the entry point for every session. |
+| `default_agent` | Makes `wippaAGENT` the entry point for every session. |
 | `agents.general` | Set to `disabled: true`. It is an OpenCode built-in, and this set supplies its own agents in its place. |
 | `agents.explore` | Set to `disabled: true`, for the same reason. |
 | `agents.build` | Demotes the built-in coding agent to a subagent and denies it the `subagent` action, so the orchestrator keeps control of the work and the build agent writes the code. |

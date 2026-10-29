@@ -10,7 +10,7 @@ Fix a small bug.
 
 ## Expected primary agent
 
-agentWIPPA
+wippaAGENT
 
 ## Expected subagent(s)
 

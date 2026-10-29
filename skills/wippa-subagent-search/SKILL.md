@@ -89,7 +89,7 @@ The four roster tools above are the wired-up contract. If they are not available
 
 - `wippa_subagent_search` — grep the agent directories for the query, matching filenames, category directories and the `description:` frontmatter.
 - `wippa_subagent_get` — read the matching agent file and summarise it per *Reporting results*; return it verbatim only when asked.
-- `wippa_subagent_list` — read the `## Your roster` section of the `agentWIPPA` agent file for the categories, and the agent files for the descriptions.
+- `wippa_subagent_list` — read the `## Your roster` section of the `wippaAGENT` agent file for the categories, and the agent files for the descriptions.
 - `wippa_subagent_invalid` — re-scan the directories and report the drift against the roster.
 
 Agent definitions live in one of these places:
