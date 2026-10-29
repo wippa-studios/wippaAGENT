@@ -1,5 +1,5 @@
 ---
-name: Compliance and Privacy Playbooks
+name: compliance-privacy-playbooks
 description: Compliance, privacy and directory-hardening playbooks for the security-reviewer subagent: Active Directory security posture, compliance frameworks, privacy under GDPR and CCPA, and healthcare data under HIPAA. Use this skill when a brief involves a compliance framework, a privacy or data-protection review, an Active Directory security assessment, or handling health data, and load it before starting that work.
 ---
 

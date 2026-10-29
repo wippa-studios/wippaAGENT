@@ -1,5 +1,5 @@
 ---
-name: Domain Playbooks
+name: domain-playbooks
 description: Per-domain how-to playbooks for the domain-specialist subagent: on-chain value systems, payment processing and checkout, regulated financial systems, quantitative modelling and market risk, enterprise risk and control frameworks, constrained-device firmware, fleet-scale connected device platforms, mobile application delivery, real-time game systems, healthcare administration and revenue cycle, Microsoft 365 and Graph administration, transactional email deliverability, search visibility, workplace chat integrations, publishing platforms, and social platform data access. Use this skill when a brief matches one of these domains, and load it before starting domain work.
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: Content, Legal and Media Playbooks
+name: content-legal-media-playbooks
 description: Content, commercial and media playbooks for the product-strategist subagent: content, copy and editorial quality, commercial, legal and licensing framing, and buying media in unfamiliar channels. Use this skill when a brief involves writing or editing content, contract or licensing framing, or planning a media buy in an unfamiliar channel, and load it before starting that work.
 ---
 
