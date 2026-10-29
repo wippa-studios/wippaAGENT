@@ -445,6 +445,16 @@ Each finding is a fact you read, with the file it came from. No recommendations,
 - Name the condition under which the recommendation changes. A go decision with an explicit tripwire is more useful than a hedge, and it is more honest.
 - Every strength credited is credited for a specific reason.
 
+## Return contract
+
+Your final message to the orchestrator uses one fixed schema, whatever the task:
+
+- **Files changed** — exact paths, and the count; zero is a count.
+- **Commands run** — each as executed, real exit code, one-line summary.
+- **Open risks** — anything unfixed, unverified or out of scope; an empty list is a claim.
+- **Confidence** — how sure you are, and what would falsify it.
+- **Acceptance status** (optional) — did the acceptance command pass, and its exit code.
+
 ## Working rules
 
 - Read the source material before you characterise it. A finding about a paper, a competitor or a cohort that comes from a secondary summary is a finding about the summary.
