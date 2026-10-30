@@ -6,8 +6,13 @@
 // from the corpus budget because they load on demand — they are listed
 // separately for visibility. Skill *listings* are not on demand, though: at
 // every model step OpenCode advertises each permitted skill's id, name and
-// description, so that always-on surface is reported and can be budgeted with
-// --max-skills.
+// description wrapped in the markup of its listing template, so that
+// always-on surface is reported and can be budgeted with --max-skills. The
+// count follows the bytes the template actually emits (see
+// SKILL_LISTING_BLOCK below). The fixed prologue and <available_skills>
+// wrapper around the per-skill blocks are reported separately: they are
+// emitted once per session and exist at any skill count, so budgeting them
+// under a per-skill ceiling would misattribute OpenCode's own scaffolding.
 //
 // Heuristic: one token is taken as four characters. A real tokenizer's count
 // depends on its vocabulary and on the text, but chars/4 tracks English plus
@@ -36,8 +41,9 @@ if (args.includes("--help") || args.includes("-h")) {
 
 Reports the estimated token count of the prompt corpus (wippaAGENT.md plus
 categories/*/*.md), per file and total, the on-demand skill bodies, and the
-always-on skill listings OpenCode advertises at every model step (each skill's
-id, name and description). Either ceiling can be enforced.
+always-on skill listings OpenCode advertises at every model step (each
+skill's id, name and description, counted as the listing template emits them,
+markup included). Either ceiling can be enforced.
 
 Options:
   --max N          fail with exit 1 when the corpus exceeds N estimated tokens
@@ -145,10 +151,54 @@ function skillFrontmatter(rel) {
 }
 
 /**
- * One row per skill for the always-on listing: what OpenCode advertises is the
- * path-derived id plus the frontmatter `name` and `description`; the body is
- * loaded only when the skill is called. A missing `name` falls back to the id,
+ * The per-skill block the always-on listing emits, byte for byte: the
+ * path-derived id plus the frontmatter `name` and `description`, wrapped in
+ * the markup of OpenCode's skill-guidance template and joined to its
+ * neighbours by a newline. The template is the one the shipped OpenCode
+ * binary builds for the initial render of its `SkillInstructions` surface —
+ * verified against OpenCode v2.2.0, whose renderer emits, per skill:
+ *
+ *   "  <skill>", `    <id>${id}</id>`, `    <name>${name}</name>`,
+ *   `    <description>${description}</description>`, "  </skill>"
+ *
+ * joined with newlines. Counting the markup rather than a space-joined
+ * paraphrase keeps the number honest: the tags and indentation are bytes the
+ * model pays for on every step. A missing `name` falls back to the id,
  * exactly as OpenCode's display name does.
+ */
+function skillListingBlock(id, name, description) {
+  return (
+    [
+      "  <skill>",
+      `    <id>${id}</id>`,
+      `    <name>${name}</name>`,
+      `    <description>${description}</description>`,
+      "  </skill>",
+    ].join("\n") + "\n"
+  )
+}
+
+/**
+ * The fixed prologue and `<available_skills>` wrapper the same renderer puts
+ * around the per-skill blocks. Emitted once per session whether zero or one
+ * hundred skills are listed, so it is reported on its own line and is not
+ * part of the per-skill ceiling: `--max-skills` budgets the surface that
+ * grows with the skill set, not OpenCode's own scaffolding.
+ */
+const SKILL_LISTING_FIXED =
+  [
+    "Skills provide specialized instructions and workflows for specific tasks.",
+    "Use the skill tool to load a skill when a task matches its description.",
+    "The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.",
+    "<available_skills>",
+  ].join("\n") +
+  "\n" +
+  "</available_skills>"
+
+/**
+ * One row per skill for the always-on listing, counting the emitted block:
+ * the id, name and description as the template wraps them; the body is loaded
+ * only when the skill is called.
  */
 function skillListingRows() {
   const rows = []
@@ -156,11 +206,11 @@ function skillListingRows() {
     const rel = `skills/${dir}/SKILL.md`
     if (!existsSync(join(ROOT, rel))) continue
     const { name, description } = skillFrontmatter(rel)
-    const advertised = `${dir} ${name || dir} ${description}`.replace(/\s+/g, " ").trim()
+    const block = skillListingBlock(dir, name || dir, description)
     rows.push({
       file: rel,
-      chars: advertised.length,
-      tokens: estimate(advertised),
+      chars: block.length,
+      tokens: estimate(block),
       hasDescription: description.trim().length > 0,
     })
   }
@@ -257,7 +307,9 @@ if (listings.length > 0) {
   const listingChars = listings.reduce((sum, row) => sum + row.chars, 0)
   listingTokens = listings.reduce((sum, row) => sum + row.tokens, 0)
   console.log("")
-  console.log("always-on skill listings (id + name + description, advertised at every model step):")
+  console.log(
+    "always-on skill listings (each skill's advertised block as the listing template emits it, markup included):",
+  )
   for (const row of listings) {
     const missing = row.hasDescription ? "" : " (no description: not advertised)"
     console.log(
@@ -266,6 +318,11 @@ if (listings.length > 0) {
   }
   console.log(
     `${"LISTINGS TOTAL".padEnd(nameWidth)}  ${String(listingChars).padStart(7)}  ${String(listingTokens).padStart(11)}`,
+  )
+  // The wrapper around the per-skill blocks is a fixed cost, so it is shown
+  // for visibility but not summed into the budgeted total above.
+  console.log(
+    `  ${"(prologue + wrapper, once per session)".padEnd(nameWidth)}  ${String(SKILL_LISTING_FIXED.length).padStart(7)}  ${String(estimate(SKILL_LISTING_FIXED)).padStart(11)} (fixed, reported only)`,
   )
 }
 
