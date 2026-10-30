@@ -66,7 +66,7 @@ git clone --depth 1 https://github.com/wippa-studios/wippaAGENT.git \
   && ./install.sh
 ```
 
-That is a clone, not a download piped into a shell: you get the whole repository, and `install.sh` is a plain shell script you can read before it runs. The tip below previews the install without writing anything.
+That is a clone, not a download piped into a shell: you get the whole working tree, and `install.sh` is a plain shell script you can read before it runs. The tip below previews the install without writing anything.
 
 **2. Point OpenCode at the orchestrator**
 
@@ -154,7 +154,7 @@ flowchart TB
 
 ### Prompt budget
 
-The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included.
+The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included. Around the list OpenCode emits a fixed prologue and an `<available_skills>` wrapper — about **110 estimated tokens**, reported separately by the script; the full always-on skill surface today is about **1,075 estimated tokens**.
 
 CI runs the same chain — `npm ci`, the type check, the test suite, `check:claims`, `check:tokens`, the installer dry run and the eval validation — plus a smoke job that loads the installed tree on a pinned OpenCode binary without credentials. A live dispatch of the eval scenarios through a model is the manual, secret-guarded `dispatch-eval` workflow; the scenario format and live mode are documented in `evals/README.md`.
 

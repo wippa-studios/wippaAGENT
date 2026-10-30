@@ -11,7 +11,7 @@ Four kinds of change are welcome.
 
 ## Adding or changing an agent
 
-A roster change touches three files, and the claims gate keeps them in step:
+A roster change touches three files. `npm run check:claims` keeps the definition and its roster row in step by file name and id; `npm test` checks the counts, the drift and the install behaviour; `npm run check:tokens` enforces the budget. The README table has no gate and is updated by hand:
 
 - **The definition.** `categories/NN-slug/<agent-id>.md`, in the category directory that owns the work, using the same numeric prefix and slug style as the existing ones. The file name is the agent id, so `categories/04-quality-security/quality-auditor.md` gives the id `quality-auditor`. The installer flattens the category directory, which means the id is the file name and nothing else.
 - **The roster.** One row for the agent in the `## Your roster` table of `wippaAGENT.md`, and the category's count. That table is also the routing index the quick-routing and tie-break rules read from, so a missing row is a routing gap, not just bookkeeping.
@@ -57,7 +57,7 @@ A roster change touches three files, and the claims gate keeps them in step:
 After `npm ci` once (the pull request section explains why):
 
 - **`npm test`** — the suite exercises the catalog, the verify guard's policy, the plugin through the real OpenCode plugin types, the installer against throwaway directories, the eval parser and the smoke script.
-- **`npm run check:claims`** — the consistency gate over the product surface. It fails when the primary agent file named by `install.sh`, `tools/catalog.ts` and `opencode.json` disagree; when a category file, its roster row or a category count disagree; when the README's tools badge or its "At a glance" cell drifts from the registrations in `tools/index.ts`; when the installer's skills loop would miss a `skills/*/` directory; when a "skill `X`" pointer names a skill with no `SKILL.md`; or when the old primary agent id survives outside `CHANGELOG.md`.
+- **`npm run check:claims`** — the consistency gate over the product surface. It fails when the primary agent file named by `install.sh`, `tools/catalog.ts` and `opencode.json` disagree; when a category file and its roster row disagree (the counts are checked by `npm test`); when the README's tools badge or its "At a glance" cell drifts from the registrations in `tools/index.ts`; when the installer's skills loop would miss a `skills/*/` directory; when a "skill `X`" pointer names a skill with no `SKILL.md`; or when the old primary agent id survives outside `CHANGELOG.md`.
 - **`npm run check:tokens`** — the corpus ceiling. An agent definition that grows past the budget belongs partly in a skill under `skills/`, which loads on demand; the playbook skills in this repository are the worked example.
 - **`npm run typecheck`** — when the change touches `tools/`.
 

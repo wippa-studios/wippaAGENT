@@ -69,22 +69,27 @@ function customAgentIds(): Set<string> {
 
 // The user-level OpenCode configuration directory. OPENCODE_CONFIG_DIR is the
 // override install.sh writes to, so the plugin reads the same scope the
-// installer used. install.sh reads it as
-// `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}`, so an empty or
-// whitespace-only value is unset here too.
+// installer used. An empty or whitespace-only value is unset; any other value
+// is passed through raw, without trimming, because neither install.sh nor the
+// CLI trims: a padded value names no directory they would use, so it names
+// none here either.
 function globalConfigDir(): string {
-  return process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
+  const value = process.env.OPENCODE_CONFIG_DIR
+  if (value === undefined || value.trim() === "") return join(homedir(), ".config", "opencode")
+  return value
 }
 
 // A direct config file path from OPENCODE_CONFIG, which the CLI loads between
 // the global and the project configs, so its values outrank the global file
 // and are outranked by project files. An empty or whitespace-only value is
-// unset, like OPENCODE_CONFIG_DIR, and a relative path resolves against the
-// process working directory, matching the CLI's own resolution of the
-// variable.
+// unset; any other value is passed through raw, without trimming, because the
+// CLI does not trim: a padded value names no file the CLI would open, and it
+// must not name one here. A relative path resolves against the process
+// working directory, as the CLI resolves it.
 function explicitConfigFile(): string | undefined {
-  const value = process.env.OPENCODE_CONFIG?.trim()
-  return value ? resolve(value) : undefined
+  const value = process.env.OPENCODE_CONFIG
+  if (value === undefined || value.trim() === "") return undefined
+  return resolve(value)
 }
 
 // A directory is global when it is the user-level OpenCode agent directory.

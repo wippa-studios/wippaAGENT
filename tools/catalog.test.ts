@@ -868,30 +868,56 @@ test("a project config overrides the OPENCODE_CONFIG file for the same agent", (
   })
 })
 
-test("OPENCODE_CONFIG is trimmed, blank is unset, and an absent path is not a skip", () => {
+test("a padded OPENCODE_CONFIG is passed through raw and is not read, like the CLI", () => {
   withoutGlobalConfig(() => {
     const configPath = join(tempDir(), "custom-config.json")
     const agentsDir = join(tempDir(), "agents")
     mkdirSync(agentsDir, { recursive: true })
     writeFileSync(
-      join(agentsDir, "trimmed-config-probe.md"),
+      join(agentsDir, "padded-config-probe.md"),
       "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
     )
-    writeFileSync(configPath, '{ "agents": { "trimmed-config-probe": { "disabled": true } } }\n')
+    writeFileSync(configPath, '{ "agents": { "padded-config-probe": { "disabled": true } } }\n')
     const roster: RosterCategory[] = [
-      { name: "Probe", count: 1, agents: ["trimmed-config-probe"] },
+      { name: "Probe", count: 1, agents: ["padded-config-probe"] },
     ]
 
-    // A padded value is trimmed and read.
+    // Control: the exact path is read, so the clean verdict below is "not
+    // read", not "nothing to read".
+    process.env.OPENCODE_CONFIG = configPath
+    const exact = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+    assert.ok(
+      exact.some(
+        (line) =>
+          line.includes("disabled in opencode.json") && line.includes("padded-config-probe"),
+      ),
+      `the exact path is read: ${exact.join("; ")}`,
+    )
+
+    // A padded value is passed through raw, without trimming: the CLI does
+    // not trim either, so it would load no file here, and reading one would
+    // report drift from a config the session never loaded.
     process.env.OPENCODE_CONFIG = `  ${configPath}  `
     const padded = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
-    assert.ok(
-      padded.some(
-        (line) =>
-          line.includes("disabled in opencode.json") && line.includes("trimmed-config-probe"),
-      ),
-      `a padded path is trimmed and read: ${padded.join("; ")}`,
+    assert.deepEqual(
+      padded,
+      [],
+      `a padded path is passed through raw and is not read: ${padded.join("; ")}`,
     )
+  })
+})
+
+test("an empty or whitespace-only OPENCODE_CONFIG is unset", () => {
+  withoutGlobalConfig(() => {
+    const configPath = join(tempDir(), "custom-config.json")
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "blank-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(configPath, '{ "agents": { "blank-config-probe": { "disabled": true } } }\n')
+    const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["blank-config-probe"] }]
 
     // An empty or whitespace-only value is unset, like OPENCODE_CONFIG_DIR.
     for (const value of ["", "   "]) {
@@ -903,6 +929,18 @@ test("OPENCODE_CONFIG is trimmed, blank is unset, and an absent path is not a sk
         `${JSON.stringify(value)} falls back to no explicit config: ${drift.join("; ")}`,
       )
     }
+  })
+})
+
+test("an absent OPENCODE_CONFIG path is not a skip", () => {
+  withoutGlobalConfig(() => {
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "absent-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["absent-config-probe"] }]
 
     // A path that does not exist is absence, not a skip: no config lives
     // there and no verdict was computed without any settings.
