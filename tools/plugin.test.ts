@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -56,18 +56,21 @@ interface FakeContext {
     remove(key: string): Promise<void>
   }
   permission: { assert(input: PermissionCall): Promise<void> }
-  vcs: { diff(input: VcsDiffCall, options?: { signal?: AbortSignal }): Promise<readonly DiffFile[]> }
+  vcs: {
+    diff(
+      input: VcsDiffCall,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ location: { directory: string }; data: readonly DiffFile[] }>
+  }
   tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
 }
 
+// The real `ctx.vcs.diff` input: the location comes from the plugin instance,
+// so the caller passes the mode, an optional base and the context lines.
 interface VcsDiffCall {
-  directory: string
-  worktree: string
-  canonical: string
   mode: string
   base?: string
   context: number
-  maxOutputBytes: number
 }
 
 interface DiffFile {
@@ -136,7 +139,7 @@ function fakeHost(
       async diff(input, options) {
         diffCalls.push({ ...input, signal: options?.signal })
         if (diffError !== undefined) throw diffError
-        return diffFiles
+        return { location: { directory }, data: diffFiles }
       },
     },
     tool: {
@@ -594,9 +597,7 @@ test("a custom global agent is in the catalog when it is listed in WIPPA_CUSTOM_
 
 test("diff reads the working diff as structured files", async () => {
   const { root } = probeFixture()
-  const worktree = join(root, "worktree")
-  const canonical = join(root, "canonical")
-  const host = fakeHost(root, { directory: worktree, canonical })
+  const host = fakeHost(root)
   const files = [
     { file: "src/a.ts", patch: "@@ -1 +1 @@\n-old\n+new\n", additions: 1, deletions: 1, status: "modified" as const },
     { file: "src/b.ts", patch: "", additions: 4, deletions: 0, status: "added" as const },
@@ -607,20 +608,20 @@ test("diff reads the working diff as structured files", async () => {
   const controller = new AbortController()
   const content = await runTool(host, "diff", {}, controller.signal)
 
-  assert.deepEqual(JSON.parse(content), files)
+  assert.deepEqual(
+    JSON.parse(content),
+    files,
+    "the location envelope of the VCS reply is unwrapped to the file list",
+  )
   assert.equal(host.diffCalls.length, 1)
   assert.deepEqual(host.diffCalls[0], {
-    directory: root,
-    worktree,
-    canonical,
     mode: "working",
     context: 3,
-    maxOutputBytes: 1_000_000,
     signal: controller.signal,
   })
 })
 
-test("diff passes the requested mode and base and clamps its bounds", async () => {
+test("diff passes the requested mode and base and clamps the context window", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -629,14 +630,12 @@ test("diff passes the requested mode and base and clamps its bounds", async () =
     mode: "branch",
     base: "origin/main",
     context: 1_000,
-    maxOutputBytes: 1,
   })
 
   const call = host.diffCalls[0]!
   assert.equal(call.mode, "branch")
   assert.equal(call.base, "origin/main")
   assert.equal(call.context, 100)
-  assert.equal(call.maxOutputBytes, 1_024)
 })
 
 test("diff refuses an unknown mode without asking the VCS", async () => {
@@ -712,4 +711,54 @@ test("a roster beside the agents directory still invalidates the cache", async (
   const second = await runTool(host, "subagent_list", {})
   assert.match(second, /## Beside Renamed \(3\)/)
   assert.ok(!second.includes("## Probe Group"), "the cached category fields are not reused")
+})
+
+test("a new agent file invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.ok(!first.includes("`probe-delta`"))
+
+  writeFileSync(join(agents, "probe-delta.md"), probeAgent("Delta probe agent."))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.ok(
+    second.includes("`probe-delta`"),
+    "the new file is indexed without an explicit cache clear",
+  )
+})
+
+test("a removed agent file invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.ok(first.includes("`probe-gamma`"))
+
+  rmSync(join(agents, "probe-gamma.md"))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.ok(!second.includes("`probe-gamma`"), "the removed file leaves the catalog")
+})
+
+test("a nested category edit invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const nested = join(agents, "01-extra")
+  mkdirSync(nested, { recursive: true })
+  const path = join(nested, "nested-probe.md")
+  writeFileSync(path, probeAgent("Nested probe agent."))
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_search", { query: "nested-probe" })
+  assert.match(first, /Nested probe agent\./)
+  assert.match(first, /01-extra|extra/, "the nested category is indexed")
+
+  writeFileSync(path, probeAgent("Nested probe agent, renamed."))
+
+  const second = await runTool(host, "subagent_search", { query: "nested-probe" })
+  assert.match(second, /Nested probe agent, renamed\./)
 })

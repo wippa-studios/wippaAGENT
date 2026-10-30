@@ -272,9 +272,13 @@ function flatList(catalog: Catalog, limit?: number): string {
   return lines.join("\n")
 }
 
-/** Reports what a refresh changed, including the drift against the roster. */
-export function invalid(catalog: Catalog, roster: RosterCategory[]): string {
-  const drift = describeDrift(catalog, roster)
+/**
+ * Reports what a refresh changed, including the drift against the roster.
+ * `base` is the location directory whose config files are read; it defaults to
+ * the process working directory for a caller that has no location of its own.
+ */
+export function invalid(catalog: Catalog, roster: RosterCategory[], base?: string): string {
+  const drift = describeDrift(catalog, roster, base)
   const lines = [
     "## Subagent cache refreshed",
     "",

@@ -21,10 +21,16 @@
     "test": "node --test \"**/*.test.ts\"",
     "eval": "node evals/run.ts",
     "check:claims": "node scripts/check-claims.mjs",
-    "check:tokens": "node scripts/token-count.mjs --max 110000",
-    "typecheck": "npx --yes --package typescript@5 --package @types/node -- bash -c 'bin=$(command -v tsc); root=$(dirname \"$(dirname \"$bin\")\"); tsc --noEmit -p tsconfig.json --typeRoots \"$root/@types\"'"
+    "check:tokens": "node scripts/token-count.mjs --max 110000 --max-skills 1000",
+    "check:smoke": "node scripts/opencode-smoke.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
     "node": ">=22.18.0"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.2.2",
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
   }
 }

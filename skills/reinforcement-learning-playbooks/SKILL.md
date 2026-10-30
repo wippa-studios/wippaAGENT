@@ -1,5 +1,5 @@
 ---
-name: reinforcement-learning-playbook
+name: reinforcement-learning-playbooks
 description: Reinforcement-learning playbooks for the data-engineer subagent: framing a sequential decision problem, environment and reward design, algorithm selection and policy optimisation, training infrastructure, exploration and multi-agent learning, transfer and safety, sweep protocol and run reporting, reading results, and deploying and monitoring a policy. Use this skill when a brief involves RL, policy training, reward design, an experiment sweep across model or algorithm setups, or judging which algorithm fits a data budget and action space.
 ---
 

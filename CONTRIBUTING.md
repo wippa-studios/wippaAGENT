@@ -59,6 +59,8 @@ Four kinds of change are welcome.
 
 A pull request should say which category it touches and why that category is the right home for the change. Include what you ran, what it returned, and what you did not check. A pull request that changes the roster should also update the agent table in `README.md` so the two stay in step.
 
+Run `npm ci` once before working in this repository: the checks use the committed lockfile, and `npm run typecheck` resolves TypeScript and the OpenCode plugin types from it rather than downloading a toolchain of its own.
+
 A pull request that changes routing runs `npm run eval -- --check`, which checks that every scenario in `evals/scenarios/` still parses and names agents that exist. If the change adds a behaviour the set should keep, add a scenario for it and name the command that decides it.
 
 ## Licence

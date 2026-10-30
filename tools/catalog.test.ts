@@ -19,6 +19,7 @@ import {
   describeDrift,
   fingerprint,
   parseFrontmatter,
+  parseJsonc,
   parseRoster,
   readRoster,
   resolveAgentDirs,
@@ -39,6 +40,29 @@ function bundleCatalog(): Catalog {
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "wippa-catalog-"))
+}
+
+/**
+ * Runs `fn` with the global config directory pointed at an empty temporary
+ * directory, so a drift assertion describes the repository alone and not the
+ * machine the test happens to run on. The system directory (`/etc/opencode`)
+ * cannot be redirected this way; it is absent on the CI runner and on a
+ * standard development machine.
+ */
+function withoutGlobalConfig<T>(fn: () => T): T {
+  const previousConfig = process.env.OPENCODE_CONFIG_DIR
+  const previousHome = process.env.HOME
+  const home = tempDir()
+  process.env.OPENCODE_CONFIG_DIR = join(home, "opencode")
+  process.env.HOME = home
+  try {
+    return fn()
+  } finally {
+    if (previousConfig === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previousConfig
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  }
 }
 
 /** Every agent file of the repository tree, in the order the walk finds them. */
@@ -516,14 +540,16 @@ test("a project directory still indexes every file, roster or not", () => {
 })
 
 test("the shipped bundle has no drift against its own roster", () => {
-  const roster = readRoster([CATEGORIES_DIR])
-  const catalog = buildCatalog([CATEGORIES_DIR], roster)
+  withoutGlobalConfig(() => {
+    const roster = readRoster([CATEGORIES_DIR])
+    const catalog = buildCatalog([CATEGORIES_DIR], roster)
 
-  assert.deepEqual(describeDrift(catalog, roster), [], "roster, files and counts agree")
-  for (const agent of catalog.agents) {
-    assert.equal(agent.mode, "subagent", `${agent.id} is a subagent`)
-    assert.equal(agent.scope, "project", `${agent.id} comes from the bundle`)
-  }
+    assert.deepEqual(describeDrift(catalog, roster), [], "roster, files and counts agree")
+    for (const agent of catalog.agents) {
+      assert.equal(agent.mode, "subagent", `${agent.id} is a subagent`)
+      assert.equal(agent.scope, "project", `${agent.id} comes from the bundle`)
+    }
+  })
 })
 
 test("describeDrift reports a deliberately mismatched roster", () => {
@@ -589,6 +615,240 @@ test("WIPPA_CUSTOM_AGENT_IDS suppresses the drift of exactly the listed ids", ()
   }
 })
 
+test("describeDrift tolerates JSONC comments and trailing commas in a config", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "jsonc-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  // The config a user hand-edits: comments, a block comment and a trailing
+  // comma, exactly the forms install.sh already accepts.
+  writeFileSync(
+    join(root, "opencode.json"),
+    `{
+  // the disabled probes of this project
+  "agents": {
+    "jsonc-probe": { "disabled": true }, /* keep the comma */
+  },
+}
+`,
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], root)
+
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("jsonc-probe"),
+    ),
+    `the JSONC config is read: ${drift.join("; ")}`,
+  )
+})
+
+test("parseJsonc strips comments and trailing commas but keeps strings intact", () => {
+  const parsed = JSON.parse(
+    parseJsonc(
+      `{
+  // a line comment
+  "url": "https://example.com//path", /* a block comment */
+  "list": [1, 2,],
+}`,
+    ),
+  )
+  assert.equal(parsed.url, "https://example.com//path", "a URL inside a string is not a comment")
+  assert.deepEqual(parsed.list, [1, 2])
+})
+
+test("describeDrift tolerates a config whose top level is not an object and keeps reading", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "survivor-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  // `null` used to throw a raw TypeError out of the drift report. The valid
+  // file beside it must still be read.
+  writeFileSync(join(root, "opencode.json"), "null\n")
+  writeFileSync(
+    join(root, "opencode.jsonc"),
+    '{ "agents": { "survivor-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], root)
+
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("survivor-probe"),
+    ),
+    `one bad candidate does not poison the read: ${drift.join("; ")}`,
+  )
+})
+
+test("describeDrift skips an unreadable candidate and still reads the next one", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "dir-candidate-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  // A directory named like a config file is a candidate that cannot be read.
+  mkdirSync(join(root, "opencode.json"), { recursive: true })
+  writeFileSync(
+    join(root, "opencode.jsonc"),
+    '{ "agents": { "dir-candidate-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], root)
+
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("dir-candidate-probe"),
+    ),
+    `the readable candidate is still read: ${drift.join("; ")}`,
+  )
+})
+
+test("describeDrift reads the global config pointed at by OPENCODE_CONFIG_DIR", () => {
+  const previous = process.env.OPENCODE_CONFIG_DIR
+  const configDir = tempDir()
+  const agentsDir = join(tempDir(), "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "global-config-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(configDir, "opencode.json"),
+    '{ "agents": { "global-config-probe": { "disabled": true } } }\n',
+  )
+
+  process.env.OPENCODE_CONFIG_DIR = configDir
+  try {
+    const drift = describeDrift(buildCatalog([agentsDir]), [], tempDir())
+    assert.ok(
+      drift.some(
+        (line) => line.includes("disabled in opencode.json") && line.includes("global-config-probe"),
+      ),
+      `the global config is read: ${drift.join("; ")}`,
+    )
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = previous
+  }
+})
+
+test("describeDrift reads a config in an ancestor directory of the location", () => {
+  const outer = tempDir()
+  const location = join(outer, "inner")
+  const agentsDir = join(location, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "ancestor-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(outer, "opencode.json"),
+    '{ "agents": { "ancestor-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], location)
+
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("ancestor-probe"),
+    ),
+    `the ancestor config is read: ${drift.join("; ")}`,
+  )
+})
+
+test("describeDrift lets a nearer config re-enable what a farther one disabled", () => {
+  const outer = tempDir()
+  const location = join(outer, "inner")
+  const agentsDir = join(location, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  mkdirSync(join(location, ".opencode"), { recursive: true })
+  writeFileSync(
+    join(agentsDir, "reenable-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(outer, "opencode.json"),
+    '{ "agents": { "reenable-probe": { "disabled": true } } }\n',
+  )
+  writeFileSync(
+    join(location, ".opencode", "opencode.json"),
+    '{ "agents": { "reenable-probe": { "disabled": false } } }\n',
+  )
+
+  // The roster lists the probe, so the only possible drift is the disabled
+  // line itself; the assertion can therefore demand a clean report.
+  const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["reenable-probe"] }]
+  const drift = describeDrift(buildCatalog([agentsDir], roster), roster, location)
+
+  assert.deepEqual(drift, [], `the nearer config wins: ${drift.join("; ")}`)
+})
+
+test("describeDrift lets a .opencode config override a direct config, however far away", () => {
+  const outer = tempDir()
+  const location = join(outer, "inner")
+  const agentsDir = join(location, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  mkdirSync(join(outer, ".opencode"), { recursive: true })
+  writeFileSync(
+    join(agentsDir, "override-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(
+    join(location, "opencode.json"),
+    '{ "agents": { "override-probe": { "disabled": false } } }\n',
+  )
+  writeFileSync(
+    join(outer, ".opencode", "opencode.json"),
+    '{ "agents": { "override-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], location)
+
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("override-probe"),
+    ),
+    `every .opencode config overrides every direct config: ${drift.join("; ")}`,
+  )
+})
+
+test("a config edit is reflected without rebuilding the catalog", () => {
+  // The disabled set is read from disk on every drift report, so no cached
+  // catalog can serve a stale config value.
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "config-fresh-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["config-fresh-probe"] }]
+  const catalog = buildCatalog([agentsDir], roster)
+
+  assert.deepEqual(describeDrift(catalog, roster, root), [])
+
+  writeFileSync(
+    join(root, "opencode.json"),
+    '{ "agents": { "config-fresh-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(catalog, roster, root)
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("config-fresh-probe"),
+    ),
+    `the same catalog object sees the new config: ${drift.join("; ")}`,
+  )
+})
+
 test("describeDrift reports subagents disabled in opencode.json", () => {
   const root = tempDir()
   const agentsDir = join(root, "agents")
@@ -649,14 +909,16 @@ test("describeDrift unions the disabled agents of every candidate config", () =>
 })
 
 test("describeDrift reports no disabled agent for the real bundle", () => {
-  const catalog = bundleCatalog()
-  const roster = readRoster([CATEGORIES_DIR])
-  const drift = describeDrift(catalog, roster)
+  withoutGlobalConfig(() => {
+    const catalog = bundleCatalog()
+    const roster = readRoster([CATEGORIES_DIR])
+    const drift = describeDrift(catalog, roster)
 
-  assert.ok(
-    !drift.some((line) => line.includes("disabled in opencode.json")),
-    "the disabled built-ins of opencode.json have no agent file and are not drift",
-  )
+    assert.ok(
+      !drift.some((line) => line.includes("disabled in opencode.json")),
+      "the disabled built-ins of opencode.json have no agent file and are not drift",
+    )
+  })
 })
 
 test("list groups the catalog by the category of the file path", () => {

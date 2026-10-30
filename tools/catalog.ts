@@ -67,16 +67,30 @@ function customAgentIds(): Set<string> {
   )
 }
 
-// A directory is global when it is the user-level OpenCode agent directory.
-// Everything else — the bundle, the project checkout, an explicit override — is project scope.
-// OPENCODE_CONFIG_DIR is the override install.sh writes to, so the catalog
-// indexes the same scope the installer used. install.sh reads it as
+// The user-level OpenCode configuration directory. OPENCODE_CONFIG_DIR is the
+// override install.sh writes to, so the plugin reads the same scope the
+// installer used. install.sh reads it as
 // `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}`, so an empty or
 // whitespace-only value is unset here too.
+function globalConfigDir(): string {
+  return process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
+}
+
+// A directory is global when it is the user-level OpenCode agent directory.
+// Everything else — the bundle, the project checkout, an explicit override — is project scope.
 function globalAgentsDir(): string {
-  const configDir =
-    process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
-  return join(configDir, "agents")
+  return join(globalConfigDir(), "agents")
+}
+
+// The system-wide configuration directory of OpenCode V2 for this platform. It
+// loads like the global directory and outranks both it and every project file,
+// so a managed machine's agents are part of the picture too.
+function systemConfigDir(): string | undefined {
+  if (process.platform === "darwin") return "/Library/Application Support/opencode"
+  if (process.platform === "win32") {
+    return join(process.env.ProgramData ?? "C:\\ProgramData", "opencode")
+  }
+  return "/etc/opencode"
 }
 
 function realPath(path: string): string {
@@ -637,9 +651,16 @@ function agentFileExists(catalog: Catalog, id: string): boolean {
 
 /**
  * Differences between the agents on disk and the roster: files the roster does
- * not know about, roster entries without a file, and disabled subagents.
+ * not know about, roster entries without a file, and disabled subagents. `base`
+ * is the location directory whose config files are read, matching the directory
+ * OpenCode searches from; it defaults to the process working directory for a
+ * caller that has no location of its own.
  */
-export function describeDrift(catalog: Catalog, roster: RosterCategory[]): string[] {
+export function describeDrift(
+  catalog: Catalog,
+  roster: RosterCategory[],
+  base: string = process.cwd(),
+): string[] {
   const lines: string[] = []
   const onDisk = new Set(catalog.agents.map((agent) => agent.id))
 
@@ -670,7 +691,7 @@ export function describeDrift(catalog: Catalog, roster: RosterCategory[]): strin
     }
   }
 
-  const disabled = disabledAgents(catalog)
+  const disabled = disabledAgents(catalog, base)
   for (const agent of catalog.agents) {
     if (agent.mode === "subagent" && disabled.has(agent.id)) {
       lines.push(`Subagent is disabled in opencode.json: ${agent.id} (${agent.path})`)
@@ -680,33 +701,167 @@ export function describeDrift(catalog: Catalog, roster: RosterCategory[]): strin
   return lines
 }
 
-function configCandidates(catalog: Catalog): string[] {
-  const candidates: string[] = []
-  for (const dir of catalog.dirs) candidates.push(join(dirname(dir), "opencode.json"))
-  candidates.push(join(process.cwd(), "opencode.json"))
-  // A project scope can put a config beside the agents directory and in
-  // `.opencode/`, and `cwd` can be one of the directories already seen, so the
-  // same file must be read once.
-  return [...new Set(candidates)]
+/** True for a JSON object: not null, not an array, not a primitive. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function disabledAgents(catalog: Catalog): Set<string> {
-  const disabled = new Set<string>()
-  for (const path of configCandidates(catalog)) {
+/**
+ * Strips the JSONC additions OpenCode accepts in `opencode.json(c)` — `//` and
+ * block comments, and a trailing comma before a closing brace or bracket —
+ * while leaving any such sequence inside a string untouched, so a URL in the
+ * config is not corrupted. The contract matches the installer's `parseJsonc`,
+ * so the plugin and `install.sh` read the same hand-edited file the same way.
+ */
+export function parseJsonc(raw: string): string {
+  const text = raw.replace(/^\uFEFF/, "")
+  let out = ""
+  let inString = false
+  let escaped = false
+  let lineComment = false
+  let blockComment = false
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    const next = text[i + 1]
+
+    if (lineComment) {
+      if (char === "\n") {
+        lineComment = false
+        out += char
+      }
+      continue
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false
+        i += 1
+      }
+      continue
+    }
+    if (inString) {
+      out += char
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      out += char
+      continue
+    }
+    if (char === "/" && next === "/") {
+      lineComment = true
+      i += 1
+      continue
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true
+      i += 1
+      continue
+    }
+    out += char
+  }
+
+  return out.replace(/,(\s*[}\]])/g, "$1")
+}
+
+/** Both config file names OpenCode V2 loads for a directory. */
+const CONFIG_FILENAMES = ["opencode.json", "opencode.jsonc"]
+
+/**
+ * A directory and every ancestor up to the filesystem root, farthest first.
+ * OpenCode searches from the location directory to the root, so a nearer file
+ * must come after a farther one to override it.
+ */
+function ancestorDirs(base: string): string[] {
+  const dirs: string[] = []
+  let current = resolve(base)
+  for (;;) {
+    dirs.push(current)
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return dirs.reverse()
+}
+
+/**
+ * The config files OpenCode V2 would load for a location, lowest precedence
+ * first: the global config, then every ancestor's direct `opencode.json(c)`
+ * from the farthest directory to the location, then every ancestor's
+ * `.opencode/opencode.json(c)` in the same order — a `.opencode` config
+ * overrides every direct config — and finally the system config, which
+ * outranks both. The directories the agents themselves come from are added as
+ * extra candidates, so a checkout or an explicit WIPPA_AGENT_DIR keeps its own
+ * config in view even when the location is elsewhere. The result is
+ * deduplicated by path, because a location and an agent directory share most
+ * of their ancestors.
+ */
+function configCandidates(catalog: Catalog, base: string): string[] {
+  const searchDirs: string[] = [globalConfigDir()]
+  const ancestors = ancestorDirs(base)
+  for (const dir of ancestors) searchDirs.push(dir)
+  for (const dir of ancestors) searchDirs.push(join(dir, ".opencode"))
+  for (const dir of catalog.dirs) searchDirs.push(dirname(dir))
+  const system = systemConfigDir()
+  if (system) searchDirs.push(system)
+
+  const candidates: string[] = []
+  const seen = new Set<string>()
+  for (const dir of searchDirs) {
+    for (const name of CONFIG_FILENAMES) {
+      const path = join(dir, name)
+      if (seen.has(path)) continue
+      seen.add(path)
+      candidates.push(path)
+    }
+  }
+  return candidates
+}
+
+/**
+ * The agents disabled in the config files OpenCode would load for a location.
+ *
+ * The files are read in precedence order and the last value for an agent wins,
+ * so a nearer config can re-enable what a global one disabled, exactly as
+ * OpenCode resolves the merge. Every candidate is read, not just the first: a
+ * project scope can disable agents in `.opencode/opencode.json` while another
+ * candidate sits beside the agents directory.
+ *
+ * A candidate that is missing, empty, unreadable or unparseable is skipped
+ * rather than failing the read, and a file whose top level or `agents` value is
+ * not an object is skipped too — one bad file must not take the whole drift
+ * report down, and a config OpenCode itself would reject cannot disable
+ * anything.
+ */
+function disabledAgents(catalog: Catalog, base: string): Set<string> {
+  const state = new Map<string, boolean>()
+  for (const path of configCandidates(catalog, base)) {
     const raw = readSafe(path)
-    if (raw === undefined) continue
-    let parsed: { agents?: Record<string, { disabled?: unknown } | undefined> }
+    if (raw === undefined || raw.trim() === "") continue
+
+    let parsed: unknown
     try {
-      parsed = JSON.parse(raw)
+      parsed = JSON.parse(parseJsonc(raw))
     } catch {
       continue
     }
-    // Every candidate config is read, not just the first: a project scope can
-    // disable agents in `.opencode/opencode.json` while another candidate sits
-    // beside the agents directory, and the disabled set is the union.
-    for (const [id, config] of Object.entries(parsed.agents ?? {})) {
-      if (config && typeof config === "object" && config.disabled === true) disabled.add(id)
+    if (!isPlainObject(parsed)) continue
+    const agents = parsed.agents
+    if (!isPlainObject(agents)) continue
+
+    for (const [id, config] of Object.entries(agents)) {
+      if (isPlainObject(config) && typeof config.disabled === "boolean") {
+        state.set(id, config.disabled)
+      }
     }
+  }
+
+  const disabled = new Set<string>()
+  for (const [id, value] of state) {
+    if (value) disabled.add(id)
   }
   return disabled
 }

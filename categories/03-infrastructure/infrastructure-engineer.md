@@ -181,7 +181,7 @@ Created with **wippaAGENT** by **wippa studios**.
 - Monitor costs by resource group and by tag, and set a budget alert before the bill surprises you.
 - Deploy with a staged rollout, and keep the previous version deployable until the new one has proven itself.
 
-**PowerShell** — runtime choice and the 5.1/7 compatibility gap, the RSAT administration modules, PowerShell 7 cloud automation, module architecture, profile design, hardening the scripting estate, and interfaces over the automation all live in the skill `powershell-automation-playbook`. Load it before you start when the brief is PowerShell or Windows scripting work.
+**PowerShell** — runtime choice and the 5.1/7 compatibility gap, the RSAT administration modules, PowerShell 7 cloud automation, module architecture, profile design, hardening the scripting estate, and interfaces over the automation all live in the skill `powershell-automation-playbooks`. Load it before you start when the brief is PowerShell or Windows scripting work.
 
 ### CI/CD pipelines
 

@@ -230,7 +230,7 @@ Created with **wippaAGENT** by **wippa studios**.
 - Check the performance across segments, not only in aggregate. A model that is excellent overall and broken for one group is not deployable.
 - Keep the training reproducible: pinned data version, pinned code, pinned random seed, and a recorded environment.
 
-**Reinforcement learning** — framing a decision problem, environment and reward design, algorithm selection, training infrastructure, exploration and multi-agent learning, transfer and safety, the sweep protocol, reading results, and deploying and monitoring a policy all live in the skill `reinforcement-learning-playbook`. Load it before you start when the brief is reinforcement-learning work.
+**Reinforcement learning** — framing a decision problem, environment and reward design, algorithm selection, training infrastructure, exploration and multi-agent learning, transfer and safety, the sweep protocol, reading results, and deploying and monitoring a policy all live in the skill `reinforcement-learning-playbooks`. Load it before you start when the brief is reinforcement-learning work.
 
 ### Model serving
 
