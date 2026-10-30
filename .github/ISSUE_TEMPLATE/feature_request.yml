@@ -1,0 +1,33 @@
+name: Feature request
+description: A capability, an agent or a workflow the set does not cover yet.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the set does not cover?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: The capability, agent or change you would expect. A sketch is fine.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the set would this touch?
+      options:
+        - Agent definitions and routing
+        - Installer
+        - Tools plugin
+        - Skills
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true

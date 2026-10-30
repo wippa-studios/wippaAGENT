@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in the agent set, the installer or the tools plugin is wrong.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The exact command or steps that reproduce it. `./install.sh --dry-run` is a safe place to start.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: opencode-version
+    attributes:
+      label: OpenCode version
+      description: The output of `opencode --version`.
+      placeholder: opencode v2.2.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: The OS and its version, for example "Ubuntu 24.04" or "macOS 15.1".
+    validations:
+      required: true
+  - type: dropdown
+    id: install-scope
+    attributes:
+      label: Install scope
+      description: Where the set is installed where the bug shows up.
+      options:
+        - Global (~/.config/opencode/)
+        - Project-local (<project>/.opencode/)
+        - Not installed (running from a checkout)
+    validations:
+      required: true
+  - type: input
+    id: bundle-head
+    attributes:
+      label: Installed bundle commit, if known
+      description: The output of `git rev-parse HEAD` in the clone you installed from. Leave blank if you installed from a tarball or do not know.
+    validations:
+      required: false
