@@ -45,16 +45,20 @@ function tempDir(): string {
 /**
  * Runs `fn` with the global config directory pointed at an empty temporary
  * directory, so a drift assertion describes the repository alone and not the
- * machine the test happens to run on. The system directory (`/etc/opencode`)
- * cannot be redirected this way; it is absent on the CI runner and on a
- * standard development machine.
+ * machine the test happens to run on. `OPENCODE_CONFIG` is cleared as well:
+ * a developer's shell may name a real custom config, and a drift assertion
+ * that reads it would depend on the machine, not the fixture. The system
+ * directory (`/etc/opencode`) cannot be redirected this way; it is absent on
+ * the CI runner and on a standard development machine.
  */
 function withoutGlobalConfig<T>(fn: () => T): T {
   const previousConfig = process.env.OPENCODE_CONFIG_DIR
   const previousHome = process.env.HOME
+  const previousExplicit = process.env.OPENCODE_CONFIG
   const home = tempDir()
   process.env.OPENCODE_CONFIG_DIR = join(home, "opencode")
   process.env.HOME = home
+  delete process.env.OPENCODE_CONFIG
   try {
     return fn()
   } finally {
@@ -62,6 +66,25 @@ function withoutGlobalConfig<T>(fn: () => T): T {
     else process.env.OPENCODE_CONFIG_DIR = previousConfig
     if (previousHome === undefined) delete process.env.HOME
     else process.env.HOME = previousHome
+    if (previousExplicit === undefined) delete process.env.OPENCODE_CONFIG
+    else process.env.OPENCODE_CONFIG = previousExplicit
+  }
+}
+
+/**
+ * Runs `fn` with `OPENCODE_CONFIG` cleared, for the assertions that demand a
+ * clean drift verdict: a custom config named by the developer's shell could
+ * legitimately add a disabled line or a skip note, and the verdict under test
+ * is the one the fixture alone produces.
+ */
+function withoutExplicitConfig<T>(fn: () => T): T {
+  const previous = process.env.OPENCODE_CONFIG
+  delete process.env.OPENCODE_CONFIG
+  try {
+    return fn()
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_CONFIG
+    else process.env.OPENCODE_CONFIG = previous
   }
 }
 
@@ -684,9 +707,17 @@ test("describeDrift tolerates a config whose top level is not an object and keep
     ),
     `one bad candidate does not poison the read: ${drift.join("; ")}`,
   )
+  assert.ok(
+    drift.some(
+      (line) =>
+        line.includes("Config candidate skipped:") &&
+        line.endsWith("opencode.json (its top level is not a JSON object)"),
+    ),
+    `the non-object candidate is stated, not hidden: ${drift.join("; ")}`,
+  )
 })
 
-test("describeDrift skips an unreadable candidate and still reads the next one", () => {
+test("describeDrift surfaces an unreadable candidate and still reads the next one", () => {
   const root = tempDir()
   const agentsDir = join(root, "agents")
   mkdirSync(agentsDir, { recursive: true })
@@ -708,6 +739,14 @@ test("describeDrift skips an unreadable candidate and still reads the next one",
       (line) => line.includes("disabled in opencode.json") && line.includes("dir-candidate-probe"),
     ),
     `the readable candidate is still read: ${drift.join("; ")}`,
+  )
+  assert.ok(
+    drift.some(
+      (line) =>
+        line.includes("Config candidate skipped:") &&
+        line.endsWith("opencode.json (it is a directory, not a file)"),
+    ),
+    `the unreadable candidate is stated, not hidden: ${drift.join("; ")}`,
   )
 })
 
@@ -738,6 +777,281 @@ test("describeDrift reads the global config pointed at by OPENCODE_CONFIG_DIR", 
     if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
     else process.env.OPENCODE_CONFIG_DIR = previous
   }
+})
+
+test("describeDrift reads the config file named by OPENCODE_CONFIG", () => {
+  withoutGlobalConfig(() => {
+    const configPath = join(tempDir(), "custom-config.json")
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "explicit-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(configPath, '{ "agents": { "explicit-config-probe": { "disabled": true } } }\n')
+
+    process.env.OPENCODE_CONFIG = configPath
+    const drift = describeDrift(buildCatalog([agentsDir]), [], tempDir())
+    assert.ok(
+      drift.some(
+        (line) =>
+          line.includes("disabled in opencode.json") && line.includes("explicit-config-probe"),
+      ),
+      `the explicit config is read: ${drift.join("; ")}`,
+    )
+  })
+})
+
+test("the OPENCODE_CONFIG file overrides the global config for the same agent", () => {
+  withoutGlobalConfig(() => {
+    const configDir = join(tempDir(), "global")
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(configDir, { recursive: true })
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "explicit-precedence-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(
+      join(configDir, "opencode.json"),
+      '{ "agents": { "explicit-precedence-probe": { "disabled": true } } }\n',
+    )
+    const explicitPath = join(tempDir(), "custom-config.json")
+    writeFileSync(
+      explicitPath,
+      '{ "agents": { "explicit-precedence-probe": { "disabled": false } } }\n',
+    )
+
+    process.env.OPENCODE_CONFIG_DIR = configDir
+    process.env.OPENCODE_CONFIG = explicitPath
+    // The roster lists the probe, so a clean report means the re-enable won:
+    // the explicit file is read after the global config and overrides it.
+    const roster: RosterCategory[] = [
+      { name: "Probe", count: 1, agents: ["explicit-precedence-probe"] },
+    ]
+    const drift = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+    assert.deepEqual(drift, [], `the explicit file wins over the global one: ${drift.join("; ")}`)
+  })
+})
+
+test("a project config overrides the OPENCODE_CONFIG file for the same agent", () => {
+  withoutGlobalConfig(() => {
+    const root = tempDir()
+    const location = join(root, "inner")
+    const agentsDir = join(location, "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    mkdirSync(join(location, ".opencode"), { recursive: true })
+    writeFileSync(
+      join(agentsDir, "explicit-override-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    const explicitPath = join(tempDir(), "custom-config.json")
+    writeFileSync(
+      explicitPath,
+      '{ "agents": { "explicit-override-probe": { "disabled": true } } }\n',
+    )
+    writeFileSync(
+      join(location, ".opencode", "opencode.json"),
+      '{ "agents": { "explicit-override-probe": { "disabled": false } } }\n',
+    )
+
+    process.env.OPENCODE_CONFIG = explicitPath
+    const roster: RosterCategory[] = [
+      { name: "Probe", count: 1, agents: ["explicit-override-probe"] },
+    ]
+    const drift = describeDrift(buildCatalog([agentsDir], roster), roster, location)
+    assert.deepEqual(
+      drift,
+      [],
+      `a project config is read after the explicit file and wins: ${drift.join("; ")}`,
+    )
+  })
+})
+
+test("a padded OPENCODE_CONFIG is passed through raw and is not read, like the CLI", () => {
+  withoutGlobalConfig(() => {
+    const configPath = join(tempDir(), "custom-config.json")
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "padded-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(configPath, '{ "agents": { "padded-config-probe": { "disabled": true } } }\n')
+    const roster: RosterCategory[] = [
+      { name: "Probe", count: 1, agents: ["padded-config-probe"] },
+    ]
+
+    // Control: the exact path is read, so the clean verdict below is "not
+    // read", not "nothing to read".
+    process.env.OPENCODE_CONFIG = configPath
+    const exact = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+    assert.ok(
+      exact.some(
+        (line) =>
+          line.includes("disabled in opencode.json") && line.includes("padded-config-probe"),
+      ),
+      `the exact path is read: ${exact.join("; ")}`,
+    )
+
+    // A padded value is passed through raw, without trimming: the CLI does
+    // not trim either, so it would load no file here, and reading one would
+    // report drift from a config the session never loaded.
+    process.env.OPENCODE_CONFIG = `  ${configPath}  `
+    const padded = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+    assert.deepEqual(
+      padded,
+      [],
+      `a padded path is passed through raw and is not read: ${padded.join("; ")}`,
+    )
+  })
+})
+
+test("an empty or whitespace-only OPENCODE_CONFIG is unset", () => {
+  withoutGlobalConfig(() => {
+    const configPath = join(tempDir(), "custom-config.json")
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "blank-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(configPath, '{ "agents": { "blank-config-probe": { "disabled": true } } }\n')
+    const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["blank-config-probe"] }]
+
+    // An empty or whitespace-only value is unset, like OPENCODE_CONFIG_DIR.
+    for (const value of ["", "   "]) {
+      process.env.OPENCODE_CONFIG = value
+      const drift = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+      assert.deepEqual(
+        drift,
+        [],
+        `${JSON.stringify(value)} falls back to no explicit config: ${drift.join("; ")}`,
+      )
+    }
+  })
+})
+
+test("an absent OPENCODE_CONFIG path is not a skip", () => {
+  withoutGlobalConfig(() => {
+    const agentsDir = join(tempDir(), "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "absent-config-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["absent-config-probe"] }]
+
+    // A path that does not exist is absence, not a skip: no config lives
+    // there and no verdict was computed without any settings.
+    process.env.OPENCODE_CONFIG = join(tempDir(), "does-not-exist.json")
+    const missing = describeDrift(buildCatalog([agentsDir], roster), roster, tempDir())
+    assert.deepEqual(missing, [], `an absent explicit path is not a skip: ${missing.join("; ")}`)
+  })
+})
+
+test("a relative OPENCODE_CONFIG resolves against the process working directory", () => {
+  const previousCwd = process.cwd()
+  withoutGlobalConfig(() => {
+    const dir = tempDir()
+    const agentsDir = join(dir, "agents")
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(
+      join(agentsDir, "relative-probe.md"),
+      "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+    )
+    writeFileSync(
+      join(dir, "relative-config.json"),
+      '{ "agents": { "relative-probe": { "disabled": true } } }\n',
+    )
+    const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["relative-probe"] }]
+
+    process.chdir(dir)
+    process.env.OPENCODE_CONFIG = "relative-config.json"
+    try {
+      const drift = describeDrift(buildCatalog([agentsDir], roster), roster, dir)
+      assert.ok(
+        drift.some(
+          (line) => line.includes("disabled in opencode.json") && line.includes("relative-probe"),
+        ),
+        `the relative path resolves against the working directory: ${drift.join("; ")}`,
+      )
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+})
+
+test("describeDrift surfaces a candidate that is not valid JSON and keeps reading", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "malformed-candidate-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(join(root, "opencode.json"), "{ this is not json\n")
+  writeFileSync(
+    join(root, "opencode.jsonc"),
+    '{ "agents": { "malformed-candidate-probe": { "disabled": true } } }\n',
+  )
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], root)
+
+  assert.ok(
+    drift.some(
+      (line) =>
+        line.includes("Config candidate skipped:") &&
+        line.endsWith("opencode.json (not valid JSON or JSONC)"),
+    ),
+    `the malformed candidate is stated, not hidden: ${drift.join("; ")}`,
+  )
+  assert.ok(
+    drift.some(
+      (line) => line.includes("disabled in opencode.json") && line.includes("malformed-candidate-probe"),
+    ),
+    `the readable candidate is still read: ${drift.join("; ")}`,
+  )
+})
+
+test("describeDrift surfaces a candidate whose agents value is not an object", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "wrong-shape-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  writeFileSync(join(root, "opencode.json"), '{ "agents": ["not", "an", "object"] }\n')
+
+  const drift = describeDrift(buildCatalog([agentsDir]), [], root)
+
+  assert.ok(
+    drift.some(
+      (line) =>
+        line.includes("Config candidate skipped:") &&
+        line.endsWith("opencode.json (its agents value is not an object)"),
+    ),
+    `the wrong-shape candidate is stated, not hidden: ${drift.join("; ")}`,
+  )
+})
+
+test("an absent or empty config candidate is not reported as skipped", () => {
+  const root = tempDir()
+  const agentsDir = join(root, "agents")
+  mkdirSync(agentsDir, { recursive: true })
+  writeFileSync(
+    join(agentsDir, "no-skip-probe.md"),
+    "---\ndescription: probe\nmode: subagent\n---\n\nbody\n",
+  )
+  const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["no-skip-probe"] }]
+  // An empty file and a config without an agents key are both normal states,
+  // not skips: neither hides a setting the drift verdict needed.
+  writeFileSync(join(root, "opencode.json"), "")
+  writeFileSync(join(root, "opencode.jsonc"), '{ "theme": "dark" }\n')
+
+  const drift = withoutExplicitConfig(() => describeDrift(buildCatalog([agentsDir], roster), roster, root))
+  assert.deepEqual(drift, [], `absence is not a skip: ${drift.join("; ")}`)
 })
 
 test("describeDrift reads a config in an ancestor directory of the location", () => {
@@ -786,7 +1100,9 @@ test("describeDrift lets a nearer config re-enable what a farther one disabled",
   // The roster lists the probe, so the only possible drift is the disabled
   // line itself; the assertion can therefore demand a clean report.
   const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["reenable-probe"] }]
-  const drift = describeDrift(buildCatalog([agentsDir], roster), roster, location)
+  const drift = withoutExplicitConfig(() =>
+    describeDrift(buildCatalog([agentsDir], roster), roster, location),
+  )
 
   assert.deepEqual(drift, [], `the nearer config wins: ${drift.join("; ")}`)
 })
@@ -833,7 +1149,10 @@ test("a config edit is reflected without rebuilding the catalog", () => {
   const roster: RosterCategory[] = [{ name: "Probe", count: 1, agents: ["config-fresh-probe"] }]
   const catalog = buildCatalog([agentsDir], roster)
 
-  assert.deepEqual(describeDrift(catalog, roster, root), [])
+  assert.deepEqual(
+    withoutExplicitConfig(() => describeDrift(catalog, roster, root)),
+    [],
+  )
 
   writeFileSync(
     join(root, "opencode.json"),

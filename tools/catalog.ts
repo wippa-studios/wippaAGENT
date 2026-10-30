@@ -69,11 +69,27 @@ function customAgentIds(): Set<string> {
 
 // The user-level OpenCode configuration directory. OPENCODE_CONFIG_DIR is the
 // override install.sh writes to, so the plugin reads the same scope the
-// installer used. install.sh reads it as
-// `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}`, so an empty or
-// whitespace-only value is unset here too.
+// installer used. An empty or whitespace-only value is unset; any other value
+// is passed through raw, without trimming, because neither install.sh nor the
+// CLI trims: a padded value names no directory they would use, so it names
+// none here either.
 function globalConfigDir(): string {
-  return process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
+  const value = process.env.OPENCODE_CONFIG_DIR
+  if (value === undefined || value.trim() === "") return join(homedir(), ".config", "opencode")
+  return value
+}
+
+// A direct config file path from OPENCODE_CONFIG, which the CLI loads between
+// the global and the project configs, so its values outrank the global file
+// and are outranked by project files. An empty or whitespace-only value is
+// unset; any other value is passed through raw, without trimming, because the
+// CLI does not trim: a padded value names no file the CLI would open, and it
+// must not name one here. A relative path resolves against the process
+// working directory, as the CLI resolves it.
+function explicitConfigFile(): string | undefined {
+  const value = process.env.OPENCODE_CONFIG
+  if (value === undefined || value.trim() === "") return undefined
+  return resolve(value)
 }
 
 // A directory is global when it is the user-level OpenCode agent directory.
@@ -651,10 +667,12 @@ function agentFileExists(catalog: Catalog, id: string): boolean {
 
 /**
  * Differences between the agents on disk and the roster: files the roster does
- * not know about, roster entries without a file, and disabled subagents. `base`
- * is the location directory whose config files are read, matching the directory
- * OpenCode searches from; it defaults to the process working directory for a
- * caller that has no location of its own.
+ * not know about, roster entries without a file, disabled subagents, and any
+ * config candidate that was skipped, so a verdict computed without a file is
+ * stated rather than silent. `base` is the location directory whose config
+ * files are read, matching the directory OpenCode searches from; it defaults
+ * to the process working directory for a caller that has no location of its
+ * own.
  */
 export function describeDrift(
   catalog: Catalog,
@@ -691,11 +709,18 @@ export function describeDrift(
     }
   }
 
-  const disabled = disabledAgents(catalog, base)
+  const { disabled, skipped } = readDisabledAgents(catalog, base)
   for (const agent of catalog.agents) {
     if (agent.mode === "subagent" && disabled.has(agent.id)) {
       lines.push(`Subagent is disabled in opencode.json: ${agent.id} (${agent.path})`)
     }
+  }
+
+  // A skipped candidate is stated, not hidden: whatever it declares is absent
+  // from this report, so a reader can tell a clean verdict from one computed
+  // without a file.
+  for (const entry of skipped) {
+    lines.push(`Config candidate skipped: ${entry.path} (${entry.reason})`)
   }
 
   return lines
@@ -789,40 +814,83 @@ function ancestorDirs(base: string): string[] {
 
 /**
  * The config files OpenCode V2 would load for a location, lowest precedence
- * first: the global config, then every ancestor's direct `opencode.json(c)`
- * from the farthest directory to the location, then every ancestor's
- * `.opencode/opencode.json(c)` in the same order — a `.opencode` config
- * overrides every direct config — and finally the system config, which
- * outranks both. The directories the agents themselves come from are added as
- * extra candidates, so a checkout or an explicit WIPPA_AGENT_DIR keeps its own
- * config in view even when the location is elsewhere. The result is
- * deduplicated by path, because a location and an agent directory share most
- * of their ancestors.
+ * first: the global config, then the file named by `OPENCODE_CONFIG`, which
+ * the CLI loads between the global and the project configs, then every
+ * ancestor's direct `opencode.json(c)` from the farthest directory to the
+ * location, then every ancestor's `.opencode/opencode.json(c)` in the same
+ * order — a `.opencode` config overrides every direct config — and finally
+ * the system config, which outranks both. The directories the agents
+ * themselves come from are added as extra candidates, so a checkout or an
+ * explicit WIPPA_AGENT_DIR keeps its own config in view even when the
+ * location is elsewhere. The result is deduplicated by path, because a
+ * location and an agent directory share most of their ancestors.
  */
 function configCandidates(catalog: Catalog, base: string): string[] {
-  const searchDirs: string[] = [globalConfigDir()]
-  const ancestors = ancestorDirs(base)
-  for (const dir of ancestors) searchDirs.push(dir)
-  for (const dir of ancestors) searchDirs.push(join(dir, ".opencode"))
-  for (const dir of catalog.dirs) searchDirs.push(dirname(dir))
-  const system = systemConfigDir()
-  if (system) searchDirs.push(system)
-
   const candidates: string[] = []
   const seen = new Set<string>()
-  for (const dir of searchDirs) {
-    for (const name of CONFIG_FILENAMES) {
-      const path = join(dir, name)
-      if (seen.has(path)) continue
-      seen.add(path)
-      candidates.push(path)
-    }
+  const add = (path: string): void => {
+    if (seen.has(path)) return
+    seen.add(path)
+    candidates.push(path)
+  }
+
+  for (const name of CONFIG_FILENAMES) add(join(globalConfigDir(), name))
+  const explicit = explicitConfigFile()
+  if (explicit !== undefined) add(explicit)
+
+  const ancestors = ancestorDirs(base)
+  for (const dir of ancestors) {
+    for (const name of CONFIG_FILENAMES) add(join(dir, name))
+  }
+  for (const dir of ancestors) {
+    for (const name of CONFIG_FILENAMES) add(join(dir, ".opencode", name))
+  }
+  for (const dir of catalog.dirs) {
+    for (const name of CONFIG_FILENAMES) add(join(dirname(dir), name))
+  }
+  const system = systemConfigDir()
+  if (system) {
+    for (const name of CONFIG_FILENAMES) add(join(system, name))
   }
   return candidates
 }
 
+/** A config candidate that exists but could not contribute its settings. */
+interface SkippedConfigCandidate {
+  path: string
+  reason: string
+}
+
+/** The outcome of reading one config candidate. */
+type ConfigCandidateRead =
+  | { kind: "absent" }
+  | { kind: "skipped"; reason: string }
+  | { kind: "json"; raw: string }
+
 /**
- * The agents disabled in the config files OpenCode would load for a location.
+ * Reads one config candidate. A path that is absent, whose parent is not a
+ * directory, or whose file is empty is `absent` — the normal state of every
+ * directory that holds no config, and not a skip. A path that exists but
+ * cannot be read as a file is `skipped` with the reason, because the drift
+ * verdict is computed without whatever it declares.
+ */
+function readConfigCandidate(path: string): ConfigCandidateRead {
+  let raw: string
+  try {
+    raw = readFileSync(path, "utf8")
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" }
+    if (code === "EISDIR") return { kind: "skipped", reason: "it is a directory, not a file" }
+    return { kind: "skipped", reason: "unreadable" }
+  }
+  if (raw.trim() === "") return { kind: "absent" }
+  return { kind: "json", raw }
+}
+
+/**
+ * The agents disabled in the config files OpenCode would load for a location,
+ * plus the candidates that were skipped on the way.
  *
  * The files are read in precedence order and the last value for an agent wins,
  * so a nearer config can re-enable what a global one disabled, exactly as
@@ -830,27 +898,45 @@ function configCandidates(catalog: Catalog, base: string): string[] {
  * project scope can disable agents in `.opencode/opencode.json` while another
  * candidate sits beside the agents directory.
  *
- * A candidate that is missing, empty, unreadable or unparseable is skipped
- * rather than failing the read, and a file whose top level or `agents` value is
- * not an object is skipped too — one bad file must not take the whole drift
- * report down, and a config OpenCode itself would reject cannot disable
- * anything.
+ * A candidate that is missing, empty, unreadable or unparseable does not fail
+ * the read — one bad file must not take the whole drift report down, and a
+ * config OpenCode itself would reject cannot disable anything. But an
+ * unreadable or malformed candidate is not skipped silently either: whatever
+ * it declares is absent from `disabled`, which can flip a drift verdict, so
+ * it is returned in `skipped` and the drift report names it.
  */
-function disabledAgents(catalog: Catalog, base: string): Set<string> {
+function readDisabledAgents(
+  catalog: Catalog,
+  base: string,
+): { disabled: Set<string>; skipped: SkippedConfigCandidate[] } {
   const state = new Map<string, boolean>()
+  const skipped: SkippedConfigCandidate[] = []
   for (const path of configCandidates(catalog, base)) {
-    const raw = readSafe(path)
-    if (raw === undefined || raw.trim() === "") continue
+    const read = readConfigCandidate(path)
+    if (read.kind === "absent") continue
+    if (read.kind === "skipped") {
+      skipped.push({ path, reason: read.reason })
+      continue
+    }
 
     let parsed: unknown
     try {
-      parsed = JSON.parse(parseJsonc(raw))
+      parsed = JSON.parse(parseJsonc(read.raw))
     } catch {
+      skipped.push({ path, reason: "not valid JSON or JSONC" })
       continue
     }
-    if (!isPlainObject(parsed)) continue
+    if (!isPlainObject(parsed)) {
+      skipped.push({ path, reason: "its top level is not a JSON object" })
+      continue
+    }
     const agents = parsed.agents
-    if (!isPlainObject(agents)) continue
+    // A config without an agents key disables nothing; that is normal.
+    if (agents === undefined) continue
+    if (!isPlainObject(agents)) {
+      skipped.push({ path, reason: "its agents value is not an object" })
+      continue
+    }
 
     for (const [id, config] of Object.entries(agents)) {
       if (isPlainObject(config) && typeof config.disabled === "boolean") {
@@ -863,5 +949,5 @@ function disabledAgents(catalog: Catalog, base: string): Set<string> {
   for (const [id, value] of state) {
     if (value) disabled.add(id)
   }
-  return disabled
+  return { disabled, skipped }
 }
