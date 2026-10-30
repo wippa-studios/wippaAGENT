@@ -713,3 +713,52 @@ test("a roster beside the agents directory still invalidates the cache", async (
   assert.ok(!second.includes("## Probe Group"), "the cached category fields are not reused")
 })
 
+test("a new agent file invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.ok(!first.includes("`probe-delta`"))
+
+  writeFileSync(join(agents, "probe-delta.md"), probeAgent("Delta probe agent."))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.ok(
+    second.includes("`probe-delta`"),
+    "the new file is indexed without an explicit cache clear",
+  )
+})
+
+test("a removed agent file invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_list", {})
+  assert.ok(first.includes("`probe-gamma`"))
+
+  rmSync(join(agents, "probe-gamma.md"))
+
+  const second = await runTool(host, "subagent_list", {})
+  assert.ok(!second.includes("`probe-gamma`"), "the removed file leaves the catalog")
+})
+
+test("a nested category edit invalidates the cached catalog", async () => {
+  const { root, agents } = probeFixture()
+  const nested = join(agents, "01-extra")
+  mkdirSync(nested, { recursive: true })
+  const path = join(nested, "nested-probe.md")
+  writeFileSync(path, probeAgent("Nested probe agent."))
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const first = await runTool(host, "subagent_search", { query: "nested-probe" })
+  assert.match(first, /Nested probe agent\./)
+  assert.match(first, /01-extra|extra/, "the nested category is indexed")
+
+  writeFileSync(path, probeAgent("Nested probe agent, renamed."))
+
+  const second = await runTool(host, "subagent_search", { query: "nested-probe" })
+  assert.match(second, /Nested probe agent, renamed\./)
+})

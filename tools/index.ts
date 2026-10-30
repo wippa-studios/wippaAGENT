@@ -227,7 +227,9 @@ const plugin: Plugin.Plugin = {
           await context.progress({ status: "subagent_invalid" })
           await ctx.storage.remove(CACHE_KEY)
           const { catalog, roster } = await loadCatalog(ctx.storage, ctx.location.directory)
-          return { content: invalid(catalog, roster) }
+          // The location directory is where OpenCode searches for configs, so
+          // the drift report reads the same files the session's OpenCode does.
+          return { content: invalid(catalog, roster, ctx.location.directory) }
         },
       })
 
