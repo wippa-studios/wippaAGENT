@@ -28,3 +28,21 @@ jobs:
       - run: npm run eval -- --check
       - run: bash -n install.sh
       - run: sudo apt-get update && sudo apt-get install -y shellcheck && shellcheck install.sh
+
+  # A smoke test against a real OpenCode binary. `npm test` covers the plugin
+  # through the real @opencode/plugin types and a typed host, but only this job
+  # proves the installed tree loads in OpenCode itself: the binary is installed
+  # from a pinned npm release, the agent set is installed with install.sh, and
+  # scripts/opencode-smoke.mjs asserts that all thirteen agents resolve and the
+  # tools plugin loads. It needs no credentials and no model. A full live
+  # smoke (a prompt dispatched to a model, tools executing) is the guarded
+  # .github/workflows/dispatch-eval.yml.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - run: npm install --global @opencode/cli@2.2.2
+      - run: npm run check:smoke

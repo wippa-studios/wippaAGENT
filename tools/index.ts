@@ -1,5 +1,7 @@
 import { resolve } from "node:path"
 
+import type { Plugin } from "@opencode/plugin"
+
 import {
   buildCatalog,
   fingerprint,
@@ -25,119 +27,25 @@ import { guardVerifyCommand, validateDiffBase, validateVerifyCwd } from "./guard
  * The plugin contract of `@opencode/plugin`.
  *
  * Upstream the package exports the plugin interface as a namespace —
- * `Plugin.Plugin`, with `Plugin.define` as an identity helper — and the
- * OpenCode host provides that package at runtime. It is not a dependency of
- * this repository and it is not installed here, so importing the namespace
- * would not resolve and this file would not type-check. The declarations
- * below spell out the subset of `Plugin.Context`, `Plugin.ToolEditor` and
- * `Plugin.StorageDomain` that this plugin uses.
+ * `Plugin.Plugin`, with `Plugin.define` as an identity helper — and OpenCode
+ * provides that package to the plugins it loads. It is a devDependency here so
+ * `tsc` checks this file against the real interface rather than a copy of it;
+ * the import is type-only, so it is erased at runtime and the host never has
+ * to resolve the package for this plugin to load. `Plugin.Context` supplies
+ * the context, editor, tool, storage, permission and VCS types used below.
  */
-interface PluginPlugin {
-  readonly id: string
-  readonly setup: (context: PluginContext) => Promise<void> | void
-}
-
-/** The tool editor a transform callback receives. */
-interface PluginToolEditor {
-  namespace(namespace: { name: string; description?: string }): void
-  add(tool: PluginToolDefinition): void
-}
-
-/** A tool definition, with the input schema the tool accepts. */
-interface PluginToolDefinition {
-  name: string
-  description: string
-  input: {
-    type: "object"
-    properties: Record<string, { type: string; description?: string }>
-    required?: string[]
-    additionalProperties?: boolean
-  }
-  options?: { namespace?: string; codemode?: boolean; permission?: string }
-  execute(input: unknown, context: PluginToolContext): Promise<{ content: string }>
-}
-
-/** The context a tool execution receives. */
-interface PluginToolContext {
-  readonly sessionID: string
-  readonly agent: string
-  readonly messageID: string
-  readonly id: string
-  readonly signal: AbortSignal
-  progress(update: { status: string }): Promise<void>
-}
-
-/**
- * The permission check. `assert` evaluates the session's permission rules for
- * the action and resources, prompts when a rule resolves to `ask`, and rejects
- * when a rule denies. It is what makes `wippa_verify` obey the same agent rules
- * that `shell` obeys.
- */
-interface PluginPermission {
-  assert(input: {
-    sessionID: string
-    agent?: string
-    action: string
-    resources: string[]
-    source?: { type: "tool"; messageID: string; id: string }
-    save?: string[]
-    metadata?: Record<string, unknown>
-  }): Promise<void>
-}
-
-/** The plugin context, reduced to the members this plugin reads. */
-interface PluginContext {
-  readonly location: {
-    readonly directory: string
-    readonly project: { readonly directory: string; readonly canonical: string }
-  }
-  readonly storage: StorageLike
-  readonly permission: PluginPermission
-  readonly vcs: PluginVcs
-  readonly tool: {
-    readonly transform: (callback: (editor: PluginToolEditor) => void) => Promise<unknown>
-  }
-}
-
-/** One file in a diff, as the VCS service reports it. */
-interface PluginFileDiff {
-  file: string
-  patch: string
-  additions: number
-  deletions: number
-  status: "added" | "deleted" | "modified"
-}
-
-/**
- * The VCS service. `diff` resolves against a scope rather than the process
- * cwd, because a session can run in a worktree that is not where the plugin
- * was loaded.
- */
-interface PluginVcs {
-  diff(
-    input: {
-      directory: string
-      worktree: string
-      canonical: string
-      mode: "working" | "branch" | "committed"
-      base?: string
-      context: number
-      maxOutputBytes: number
-    },
-    options?: { signal?: AbortSignal },
-  ): Promise<readonly PluginFileDiff[]>
-}
-
 const CACHE_KEY = "catalog"
 const COMMAND_MAX_LENGTH = 10_000
 const LIMIT_MAX = 1_000
 const DIFF_CONTEXT_DEFAULT = 3
 const DIFF_CONTEXT_MAX = 100
-const DIFF_OUTPUT_DEFAULT = 1_000_000
-const DIFF_OUTPUT_MIN = 1_024
-const DIFF_OUTPUT_MAX = 8_388_608
 
-// The storage API is awaited, so it may be synchronous or asynchronous.
+/**
+ * The storage API, reduced to the untyped JSON store the cache uses. The real
+ * `Plugin.Context["storage"]` is assignable to this: its reads and writes
+ * resolve to JSON values, which `unknown` accepts, so the domain types of the
+ * cached catalog do not have to satisfy the store's `Json` index signature.
+ */
 interface StorageLike {
   get(key: string): unknown
   set(key: string, value: unknown): unknown
@@ -219,7 +127,7 @@ function coerceBounded(value: unknown, fallback: number, min: number, max: numbe
   return Math.min(max, Math.max(min, Math.floor(number)))
 }
 
-const plugin: PluginPlugin = {
+const plugin: Plugin.Plugin = {
   id: "wippa-subagent-tools",
   async setup(ctx) {
     await ctx.tool.transform((editor) => {
@@ -454,21 +362,16 @@ const plugin: PluginPlugin = {
               type: "number",
               description: `Lines of context around each hunk. Defaults to ${DIFF_CONTEXT_DEFAULT}; clamped to 0..${DIFF_CONTEXT_MAX}.`,
             },
-            maxOutputBytes: {
-              type: "number",
-              description: `Byte cap for the diff. Defaults to ${DIFF_OUTPUT_DEFAULT}; clamped to ${DIFF_OUTPUT_MIN}..${DIFF_OUTPUT_MAX}.`,
-            },
           },
           additionalProperties: false,
         },
         options: { namespace: "wippa", codemode: false },
         execute: async (input, context) => {
           await context.progress({ status: "diff" })
-          const { mode, base, context: contextLines, maxOutputBytes } = input as {
+          const { mode, base, context: contextLines } = input as {
             mode?: unknown
             base?: unknown
             context?: unknown
-            maxOutputBytes?: unknown
           }
           const requestedMode = mode === undefined ? "working" : mode
           if (
@@ -481,39 +384,37 @@ const plugin: PluginPlugin = {
             }
           }
 
-          const options: Parameters<PluginVcs["diff"]>[0] = {
-            directory: resolve(ctx.location.directory),
-            worktree: resolve(ctx.location.project.directory),
-            canonical: resolve(ctx.location.project.canonical),
-            mode: requestedMode,
-            context: coerceBounded(contextLines, DIFF_CONTEXT_DEFAULT, 0, DIFF_CONTEXT_MAX),
-            maxOutputBytes: coerceBounded(
-              maxOutputBytes,
-              DIFF_OUTPUT_DEFAULT,
-              DIFF_OUTPUT_MIN,
-              DIFF_OUTPUT_MAX,
-            ),
-          }
+          // The base reaches the VCS service as a git ref. It is untrusted
+          // tool input: absolute paths, `..` traversal and option-like
+          // prefixes are refused here with a stated reason rather than passed
+          // through to git.
+          let diffBase: string | undefined
           if (typeof base === "string" && base.trim()) {
             const trimmed = base.trim()
-            // The base reaches the VCS service as a git ref. It is untrusted
-            // tool input: absolute paths, `..` traversal and option-like
-            // prefixes are refused here with a stated reason rather than
-            // passed through to git.
             const baseError = validateDiffBase(trimmed)
             if (baseError) {
               return { content: JSON.stringify({ error: `invalid base: ${baseError}` }) }
             }
-            options.base = trimmed
+            diffBase = trimmed
+          }
+
+          // The VCS service takes its location from the plugin instance, not
+          // from the caller: the real input carries the mode, an optional base
+          // and the context lines only.
+          const options: Parameters<Plugin.Context["vcs"]["diff"]>[0] = {
+            mode: requestedMode,
+            context: coerceBounded(contextLines, DIFF_CONTEXT_DEFAULT, 0, DIFF_CONTEXT_MAX),
+            ...(diffBase === undefined ? {} : { base: diffBase }),
           }
 
           try {
             // The signal is forwarded, so a cancelled call stops the service
             // work as well as waiting for it. The service reports a refusal as
             // a rejection, which becomes structured output rather than a
-            // half-rendered patch list.
-            const files = await ctx.vcs.diff(options, { signal: context.signal })
-            return { content: JSON.stringify(files) }
+            // half-rendered patch list. The reply wraps the files in a
+            // location envelope; the tool reports the per-file list itself.
+            const result = await ctx.vcs.diff(options, { signal: context.signal })
+            return { content: JSON.stringify(result.data) }
           } catch (error) {
             return {
               content: JSON.stringify({
