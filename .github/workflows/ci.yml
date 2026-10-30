@@ -17,6 +17,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
+      # npm ci installs exactly the committed lockfile; a dependency the
+      # lockfile is missing fails here rather than resolving silently.
+      - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run check:claims
