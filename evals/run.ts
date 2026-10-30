@@ -9,7 +9,7 @@
  * because this runner cannot produce a written report.
  */
 import { spawn } from "node:child_process"
-import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -200,16 +200,20 @@ export function validateScenario(scenario: Scenario, catalog: Catalog): string[]
 
 interface Args {
   check: boolean
+  live: boolean
   timeoutMs: number
+  model?: string
   help: boolean
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { check: false, timeoutMs: DEFAULT_TIMEOUT_MS, help: false }
+  const args: Args = { check: false, live: false, timeoutMs: DEFAULT_TIMEOUT_MS, help: false }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === "--check") {
       args.check = true
+    } else if (arg === "--live") {
+      args.live = true
     } else if (arg === "-h" || arg === "--help") {
       args.help = true
     } else if (arg === "--timeout") {
@@ -220,9 +224,19 @@ function parseArgs(argv: string[]): Args {
       }
       args.timeoutMs = Math.floor(value)
       i += 1
+    } else if (arg === "--model") {
+      const raw = argv[i + 1]
+      if (raw === undefined || raw.trim() === "" || raw.startsWith("-")) {
+        throw new Error("--model needs a provider/model value")
+      }
+      args.model = raw.trim()
+      i += 1
     } else {
       throw new Error(`unknown argument: ${arg}`)
     }
+  }
+  if (args.check && args.live) {
+    throw new Error("--check and --live are mutually exclusive")
   }
   return args
 }
@@ -288,6 +302,182 @@ function runCommand(command: string, timeoutMs: number): Promise<CommandResult> 
   })
 }
 
+/**
+ * Runs one program with an argument vector — no shell — and returns the same
+ * result shape as `runCommand`. The live dispatch passes untrusted text as a
+ * single argument, so it must not go through a shell string.
+ */
+function runProcess(program: string, args: string[], timeoutMs: number): Promise<CommandResult> {
+  const started = Date.now()
+  return new Promise((resolvePromise) => {
+    const child = spawn(program, args, {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    })
+    let stdout = ""
+    let stderr = ""
+    let timedOut = false
+    let settled = false
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      killTree(child)
+    }, timeoutMs)
+
+    const finish = (exitCode: number): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({
+        exitCode: timedOut ? -1 : exitCode,
+        ok: !timedOut && exitCode === 0,
+        timedOut,
+        stdout,
+        stderr,
+        durationMs: Date.now() - started,
+      })
+    }
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (stdout.length < MAX_CAPTURED_OUTPUT) stdout += chunk.toString("utf8")
+    })
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderr.length < MAX_CAPTURED_OUTPUT) stderr += chunk.toString("utf8")
+    })
+    child.on("error", (error) => {
+      stderr = `${stderr}\n${String(error)}`.trim()
+      finish(-1)
+    })
+    child.on("close", (code) => finish(code ?? -1))
+  })
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+interface LiveSetup {
+  opencode: string
+  model: string
+}
+
+/**
+ * Prepares a live dispatch, or prints why it cannot proceed and returns
+ * undefined. It checks the binary, resolves the model and the provider key,
+ * installs the agent set into the repository's local `.opencode/` scope, and
+ * writes the provider's key as an `{env:OPENCODE_EVAL_API_KEY}` reference —
+ * the key itself is never written to a file. The scope config is rewritten as
+ * plain JSON; `.opencode/` is gitignored scratch, and a config that cannot be
+ * parsed is refused rather than clobbered.
+ */
+async function prepareLive(args: Args): Promise<LiveSetup | undefined> {
+  const opencode = process.env.OPENCODE_BIN ?? "opencode"
+  const probe = await runProcess(opencode, ["--version"], 60_000)
+  if (!probe.ok) {
+    console.error(
+      `error: the OpenCode binary could not be run (${opencode}): ` +
+        (probe.stderr.trim() || `exit ${probe.exitCode}`),
+    )
+    return undefined
+  }
+  console.log(`live: ${probe.stdout.trim() || opencode}`)
+
+  const model = args.model ?? process.env.OPENCODE_EVAL_MODEL
+  if (!model || !model.includes("/")) {
+    console.error(
+      "error: --live needs a model: pass --model provider/model or set OPENCODE_EVAL_MODEL",
+    )
+    return undefined
+  }
+  const providerID = model.split("/")[0]!
+  if (!/^[a-z0-9._-]+$/.test(providerID)) {
+    console.error(`error: "${providerID}" is not a usable provider id`)
+    return undefined
+  }
+  if (!process.env.OPENCODE_EVAL_API_KEY) {
+    console.error("error: --live needs OPENCODE_EVAL_API_KEY in the environment")
+    return undefined
+  }
+  console.log(`live: model ${model}`)
+
+  const install = await runProcess("bash", [join(REPO_ROOT, "install.sh"), "--project", "."], 120_000)
+  if (!install.ok) {
+    console.error(`error: install.sh --project . failed (exit ${install.exitCode})`)
+    console.error(install.stderr.trim())
+    return undefined
+  }
+
+  const scopeDir = join(REPO_ROOT, ".opencode")
+  mkdirSync(scopeDir, { recursive: true })
+  const configPath = join(scopeDir, "opencode.json")
+  let config: Record<string, unknown> = {}
+  if (existsSync(configPath)) {
+    try {
+      const parsed = record(JSON.parse(readFileSync(configPath, "utf8")))
+      if (!parsed) throw new Error("the top level is not a JSON object")
+      config = parsed
+    } catch (error) {
+      console.error(
+        `error: ${configPath} exists but cannot be read as a JSON object (${error instanceof Error ? error.message : String(error)}); refusing to overwrite it`,
+      )
+      return undefined
+    }
+  }
+  if (config.providers !== undefined && !record(config.providers)) {
+    console.error(`error: ${configPath} has a "providers" value that is not an object`)
+    return undefined
+  }
+  const providers = record(config.providers) ?? {}
+  const provider = record(providers[providerID]) ?? {}
+  provider.settings = { ...record(provider.settings), apiKey: "{env:OPENCODE_EVAL_API_KEY}" }
+  providers[providerID] = provider
+  config.providers = providers
+  config.default_agent = "wippaAGENT"
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  console.log(`live: scope ready at ${scopeDir} (the key stays an {env:...} reference)`)
+
+  return { opencode, model }
+}
+
+/** The prompt one scenario dispatches with: the intent, the criteria, the command. */
+function scenarioPrompt(scenario: Scenario): string {
+  return [
+    `Eval scenario ${scenario.name}: ${scenario.intent}`,
+    "",
+    "Acceptance criteria:",
+    ...scenario.criteria.map((criterion) => `- ${criterion}`),
+    "",
+    scenario.command
+      ? `When the work is done, run the acceptance command: ${scenario.command}`
+      : "The written report itself is the evidence for this scenario; no command decides it.",
+  ].join("\n")
+}
+
+/** Dispatches one scenario to the real agent and returns the run's result. */
+function dispatchScenario(
+  setup: LiveSetup,
+  scenario: Scenario,
+  timeoutMs: number,
+): Promise<CommandResult> {
+  return runProcess(
+    setup.opencode,
+    [
+      "run",
+      "--standalone",
+      "--agent",
+      "wippaAGENT",
+      "--model",
+      setup.model,
+      "--auto",
+      scenarioPrompt(scenario),
+    ],
+    timeoutMs,
+  )
+}
+
 function tail(text: string): string {
   const trimmed = text.trimEnd()
   if (trimmed.length <= FAILURE_TAIL) return trimmed
@@ -305,6 +495,12 @@ Runs every scenario in evals/scenarios/.
 
 Options:
   --check             Validate the scenarios and agent ids without running commands
+  --live              Dispatch every scenario to a real model on the OpenCode
+                      binary, then run its acceptance command. Needs the
+                      binary, OPENCODE_EVAL_MODEL and OPENCODE_EVAL_API_KEY;
+                      OPENCODE_BIN overrides the binary, --model overrides the
+                      model. See evals/README.md.
+  --model <model>     provider/model to dispatch in --live mode
   --timeout <ms>      Per-command timeout, default ${DEFAULT_TIMEOUT_MS}
   -h, --help          Print this help
 `)
@@ -342,7 +538,12 @@ async function main(argv: string[]): Promise<number> {
 
   console.log("wippaAGENT eval runner")
   console.log(`scenarios: ${files.length}`)
-  console.log(`mode: ${args.check ? "check only" : "run"}`)
+  console.log(`mode: ${args.check ? "check only" : args.live ? "live dispatch" : "run"}`)
+
+  // A live dispatch needs the binary, the model and the provider key before
+  // any scenario is considered; the reason is printed by prepareLive.
+  const live = args.live ? await prepareLive(args) : undefined
+  if (args.live && !live) return 2
 
   const results = new Map<string, Promise<CommandResult>>()
   const runOnce = (command: string): Promise<CommandResult> => {
@@ -384,7 +585,32 @@ async function main(argv: string[]): Promise<number> {
       continue
     }
 
-    if (!scenario.command) {
+    if (live) {
+      console.log(`  dispatching to ${live.model}`)
+      const dispatch = await dispatchScenario(live, scenario, args.timeoutMs)
+      if (!dispatch.ok) {
+        failed += 1
+        const cause = dispatch.timedOut
+          ? `timed out after ${args.timeoutMs}ms`
+          : `exit ${dispatch.exitCode}`
+        console.log(`  FAIL (dispatch ${cause}, ${dispatch.durationMs}ms)`)
+        if (dispatch.stdout.trim()) {
+          console.log("  dispatch stdout tail:")
+          printIndented(tail(dispatch.stdout))
+        }
+        if (dispatch.stderr.trim()) {
+          console.log("  dispatch stderr tail:")
+          printIndented(tail(dispatch.stderr))
+        }
+        continue
+      }
+      console.log(`  dispatched (exit 0, ${dispatch.durationMs}ms)`)
+      if (!scenario.command) {
+        passed += 1
+        console.log("  PASS (dispatched; the report itself is the evidence)")
+        continue
+      }
+    } else if (!scenario.command) {
       skipped += 1
       console.log("  SKIP (no command; the report itself is the evidence)")
       continue

@@ -1,0 +1,67 @@
+name: Dispatch eval
+
+# Manual, credentialed, opt-in: this workflow dispatches every scenario in
+# evals/scenarios/ through a real model on a real OpenCode binary, then runs
+# the scenario's acceptance command and reports the real exit code.
+#
+# Required repository secrets:
+#
+#   OPENCODE_EVAL_MODEL    provider/model, for example "anthropic/claude-sonnet-5-5"
+#   OPENCODE_EVAL_API_KEY  an API key for that provider
+#
+# Without BOTH secrets the job prints a notice and exits green: public CI has
+# no credentials, and a missing secret is an expected state, not a failure.
+# The workflow never runs on push or pull_request, so it can never fail a
+# build for a fork.
+#
+# What runs when the secrets exist: `npm run eval -- --live`. It installs the
+# agent set into the checkout's local .opencode/ scope, points the provider at
+# the key through an {env:...} reference (the key itself is never written to a
+# file), dispatches each scenario to wippaAGENT with `opencode run`, and judges
+# each scenario by its acceptance command. The run needs model credits and
+# network access; that is why it is manual.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "provider/model to dispatch (defaults to the OPENCODE_EVAL_MODEL secret)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      EVAL_MODEL: ${{ inputs.model || secrets.OPENCODE_EVAL_MODEL }}
+      EVAL_API_KEY: ${{ secrets.OPENCODE_EVAL_API_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Check the credentials guard
+        id: guard
+        run: |
+          if [ -n "$EVAL_MODEL" ] && [ -n "$EVAL_API_KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=dispatch-eval skipped::Set the OPENCODE_EVAL_MODEL and OPENCODE_EVAL_API_KEY repository secrets (Settings, Secrets and variables, Actions) to run a live dispatch. Nothing failed; there was nothing to dispatch with."
+          fi
+
+      - name: Install the OpenCode binary
+        if: steps.guard.outputs.ready == 'true'
+        run: npm install --global @opencode/cli@2.2.2
+
+      - name: Dispatch every scenario and run its acceptance command
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          OPENCODE_EVAL_MODEL: ${{ env.EVAL_MODEL }}
+          OPENCODE_EVAL_API_KEY: ${{ env.EVAL_API_KEY }}
+        run: npm run eval -- --live --timeout 1200000
