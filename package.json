@@ -21,7 +21,7 @@
     "test": "node --test \"**/*.test.ts\"",
     "eval": "node evals/run.ts",
     "check:claims": "node scripts/check-claims.mjs",
-    "check:tokens": "node scripts/token-count.mjs --max 110000",
+    "check:tokens": "node scripts/token-count.mjs --max 110000 --max-skills 1000",
     "check:smoke": "node scripts/opencode-smoke.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

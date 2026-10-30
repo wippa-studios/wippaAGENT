@@ -1,5 +1,5 @@
 ---
-name: powershell-automation-playbook
+name: powershell-automation-playbooks
 description: PowerShell automation playbooks for the infrastructure-engineer subagent: choosing the runtime and surviving the 5.1 and 7 compatibility gap, Windows PowerShell 5.1 with the RSAT administration modules, PowerShell 7 cross-platform cloud automation, module architecture, profile design and startup performance, hardening the scripting estate, and building interfaces over the automation. Use this skill when a brief is PowerShell work, Windows scripting, or work on the scripting estate of a Windows or hybrid infrastructure.
 ---
 

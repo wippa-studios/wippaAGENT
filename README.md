@@ -148,6 +148,10 @@ flowchart TB
 
 *Solid: delegation. Dashed: tool access — labelled where a category holds more than one agent.*
 
+### Prompt budget
+
+The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals.
+
 <br/>
 
 ## Install
