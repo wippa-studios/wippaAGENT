@@ -61,8 +61,12 @@ wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the requ
 **1. Install**
 
 ```bash
-git clone https://github.com/wippa-studios/wippaAGENT.git && cd wippaAGENT && ./install.sh
+git clone --depth 1 https://github.com/wippa-studios/wippaAGENT.git \
+  && cd wippaAGENT \
+  && ./install.sh
 ```
+
+That is a clone, not a download piped into a shell: you get the whole repository, and `install.sh` is a plain shell script you can read before it runs. The tip below previews the install without writing anything.
 
 **2. Point OpenCode at the orchestrator**
 
@@ -150,7 +154,9 @@ flowchart TB
 
 ### Prompt budget
 
-The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals.
+The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included.
+
+CI runs the same chain — `npm ci`, the type check, the test suite, `check:claims`, `check:tokens`, the installer dry run and the eval validation — plus a smoke job that loads the installed tree on a pinned OpenCode binary without credentials. A live dispatch of the eval scenarios through a model is the manual, secret-guarded `dispatch-eval` workflow; the scenario format and live mode are documented in `evals/README.md`.
 
 <br/>
 
@@ -482,7 +488,7 @@ The skills and the tools plugin need no configuration entry. They are installed 
 | `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration. They are indexed alongside the roster and are exempt from roster drift reporting. Used by the tools plugin. |
 
 > [!WARNING]
-> `opencode debug config` resolves and prints the value of `GITHUB_PERSONAL_ACCESS_TOKEN` in clear text. Treat that output as a secret, and do not paste it into an issue or a chat.
+> `opencode debug config` lists every configuration source the session loads. On the CLI versions checked here (v2.2.0 and v2.2.2) MCP server headers are redacted as `***`, but the rest of the resolved configuration prints in full. Treat the output as sensitive, and do not paste it into an issue or a chat.
 
 Restart OpenCode after changing the config so the new roster is picked up.
 
