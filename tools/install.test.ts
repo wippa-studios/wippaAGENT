@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -68,6 +69,20 @@ function sourceSkillNames(): string[] {
     .sort()
 }
 
+/** The files the installer copies out of one source directory, test files excluded. */
+function sourceFileCount(dir: string): number {
+  return filesUnder(dir).filter((path) => !path.endsWith(".test.ts")).length
+}
+
+/** Every file the installer must copy into a scope: agents, skills and plugin. */
+function installedFileTotal(): number {
+  let count = sourceAgentCount() + sourceFileCount(join(REPO_ROOT, "tools"))
+  for (const skill of sourceSkillNames()) {
+    count += sourceFileCount(join(REPO_ROOT, "skills", skill))
+  }
+  return count
+}
+
 function writeConfig(dir: string, content: string): string {
   const target = join(dir, ".opencode")
   mkdirSync(target, { recursive: true })
@@ -96,6 +111,12 @@ test("a fresh project install writes the agents, every skill and the plugin", ()
   assert.ok(existsSync(join(target, "plugins", "wippa-subagent", "index.ts")))
   assert.match(result.output, new RegExp(`agents written\\s+: ${sourceAgentCount()}`))
   assert.match(result.output, new RegExp(`skills written\\s+: ${skills.length}`))
+  // The summary is checkable arithmetic: every copied file is written, nothing
+  // is skipped, and the total is their sum.
+  const total = installedFileTotal()
+  assert.match(result.output, new RegExp(`files written\\s+: ${total}`))
+  assert.match(result.output, new RegExp(`files skipped\\s+: 0`))
+  assert.match(result.output, new RegExp(`files total\\s+: ${total}`))
 })
 
 test("test files never reach an installed scope", () => {
@@ -120,6 +141,41 @@ test("a second run over an installed scope writes nothing", () => {
   assert.equal(second.status, 0, second.output)
   assert.match(second.output, /files written\s+: 0/)
   assert.match(second.output, /files skipped\s+: [1-9]/)
+  // Skipped files are still part of the total, so 0 + skipped = total.
+  assert.match(second.output, new RegExp(`files total\\s+: ${installedFileTotal()}`))
+})
+
+test("a dry run summary counts the planned writes and adds up to the entries", () => {
+  const dir = projectDir()
+  const first = runInstaller("--project", dir)
+  assert.equal(first.status, 0, first.output)
+
+  const target = join(dir, ".opencode")
+  const removed = [
+    join(target, "agents", "domain-specialist.md"),
+    join(target, "agents", "research-analyst.md"),
+    join(target, "skills", "domain-playbooks", "SKILL.md"),
+    join(target, "skills", "compliance-privacy-playbooks", "SKILL.md"),
+    join(target, "skills", "wippa-subagent-search", "SKILL.md"),
+    join(target, "plugins", "wippa-subagent", "index.ts"),
+  ]
+  for (const path of removed) unlinkSync(path)
+
+  const result = runInstaller("--project", dir, "--dry-run")
+
+  assert.equal(result.status, 0, result.output)
+  const total = installedFileTotal()
+  const skipped = total - removed.length
+  assert.match(result.output, new RegExp(`files to install\\s+: ${removed.length}`))
+  assert.match(result.output, new RegExp(`files skipped\\s+: ${skipped}`))
+  assert.match(result.output, new RegExp(`files total\\s+: ${total}`))
+  assert.match(result.output, new RegExp(`agents to install\\s+: 2`))
+  assert.match(result.output, new RegExp(`skills to install\\s+: 3`))
+
+  // Every listed entry is counted by exactly one summary line.
+  const lines = result.output.split("\n")
+  assert.equal(lines.filter((line) => line.includes("would install")).length, removed.length)
+  assert.equal(lines.filter((line) => /^  skipped /.test(line)).length, skipped)
 })
 
 test("a modified installed file is kept unless --force is given", () => {
@@ -162,6 +218,34 @@ test("uninstall removes the installed files and keeps a modified one", () => {
   }
   assert.ok(!existsSync(join(target, "plugins", "wippa-subagent", "index.ts")))
   assert.match(result.output, /files kept\s+: 1/)
+  assert.ok(existsSync(target), "a target directory holding a kept file is not removed")
+})
+
+test("uninstall removes the target directory when it is left empty", () => {
+  const dir = projectDir()
+  runInstaller("--project", dir)
+
+  const result = runInstaller("--project", dir, "--uninstall")
+
+  assert.equal(result.status, 0, result.output)
+  assert.ok(!existsSync(join(dir, ".opencode")), "no empty target directory is left behind")
+  const total = installedFileTotal()
+  assert.match(result.output, new RegExp(`files removed\\s+: ${total}`))
+  assert.match(result.output, new RegExp(`files total\\s+: ${total}`))
+  assert.match(result.output, /No configuration file was found at:/)
+})
+
+test("uninstall keeps the target directory while the config file stays behind", () => {
+  const dir = projectDir()
+  const configPath = writeConfig(dir, '{ "theme": "dark" }\n')
+  runInstaller("--project", dir)
+
+  const result = runInstaller("--project", dir, "--uninstall")
+
+  assert.equal(result.status, 0, result.output)
+  assert.ok(existsSync(join(dir, ".opencode")), "the target holding the config is kept")
+  assert.equal(readFileSync(configPath, "utf8"), '{ "theme": "dark" }\n')
+  assert.match(result.output, /configuration file was left alone/)
 })
 
 test("a dry run writes nothing", () => {

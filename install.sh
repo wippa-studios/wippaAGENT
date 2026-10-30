@@ -28,6 +28,7 @@ UNINSTALL=0
 APPLY_CONFIG=0
 
 INSTALLED_FILES=0
+WOULD_WRITE_FILES=0
 SKIPPED_FILES=0
 REMOVED_FILES=0
 KEPT_FILES=0
@@ -194,6 +195,9 @@ copy_file() {
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
+    # A planned write is counted, not just printed: without this the summary
+    # reported the skips but not the files the run would have written.
+    WOULD_WRITE_FILES=$((WOULD_WRITE_FILES + 1))
     if [ -e "$dst" ]; then
       printf '  would overwrite %s\n' "$dst"
     else
@@ -660,16 +664,25 @@ if [ "$UNINSTALL" -eq 1 ]; then
   remove_dir_if_empty "$AGENTS_DIR"
   remove_dir_if_empty "$SKILLS_DIR"
   remove_dir_if_empty "$PLUGINS_DIR"
+  # The target directory itself is removed only when the uninstall emptied it,
+  # so a project scope does not keep an empty .opencode/ husk behind and a
+  # directory holding the user's own files is left in place.
+  remove_dir_if_empty "$TARGET_DIR"
 
   step "Summary"
   say "  files removed  : $REMOVED_FILES"
   say "  files kept     : $KEPT_FILES"
+  say "  files total    : $((REMOVED_FILES + KEPT_FILES))"
   if [ "$DRY_RUN" -eq 1 ]; then
     say "  dry run        : nothing was written"
   fi
   say ""
-  say "  The configuration file was left alone: $CONFIG_FILE"
-  say "  Remove the wippaAGENT keys from it by hand if you no longer want them."
+  if [ -f "$CONFIG_FILE" ]; then
+    say "  The configuration file was left alone: $CONFIG_FILE"
+    say "  Remove the wippaAGENT keys from it by hand if you no longer want them."
+  else
+    say "  No configuration file was found at: $CONFIG_FILE"
+  fi
   exit 0
 fi
 
@@ -701,7 +714,10 @@ if [ "$APPLY_CONFIG" -eq 1 ]; then
 fi
 
 step "1. Agents ($AGENT_TOTAL)"
-AGENTS_BEFORE=$INSTALLED_FILES
+# Written and planned writes both count, so a dry run reports the plan and a
+# real second run over an installed scope still reports zero rather than the
+# total.
+AGENTS_BEFORE=$((INSTALLED_FILES + WOULD_WRITE_FILES))
 if [ "$DRY_RUN" -eq 0 ]; then
   mkdir -p "$AGENTS_DIR"
 fi
@@ -711,12 +727,10 @@ for src in "$SCRIPT_DIR"/categories/*/*.md; do
   name="${src##*/}"
   copy_file "$src" "$AGENTS_DIR/$name"
 done
-# Only the agent files that were really written are counted, so a second run
-# over an installed scope reports zero rather than the total.
-AGENTS_INSTALLED=$((INSTALLED_FILES - AGENTS_BEFORE))
+AGENTS_INSTALLED=$((INSTALLED_FILES + WOULD_WRITE_FILES - AGENTS_BEFORE))
 
 step "2. Skills ($SKILL_SOURCE_COUNT)"
-SKILLS_BEFORE=$INSTALLED_FILES
+SKILLS_BEFORE=$((INSTALLED_FILES + WOULD_WRITE_FILES))
 if [ "$DRY_RUN" -eq 0 ] && [ "$SKILL_SOURCE_COUNT" -gt 0 ]; then
   mkdir -p "$SKILLS_DIR"
 fi
@@ -726,9 +740,7 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   name="${name##*/}"
   copy_tree "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"
 done
-# Only the skill files that were really written are counted, so a second run
-# over an installed scope reports zero rather than the total.
-SKILLS_INSTALLED=$((INSTALLED_FILES - SKILLS_BEFORE))
+SKILLS_INSTALLED=$((INSTALLED_FILES + WOULD_WRITE_FILES - SKILLS_BEFORE))
 
 step "3. Tools plugin ($PLUGIN_NAME)"
 if [ -d "$SCRIPT_DIR/tools" ]; then
@@ -749,15 +761,29 @@ if [ "$APPLY_CONFIG" -eq 1 ]; then
 fi
 
 step "Summary"
-say "  agents written      : $AGENTS_INSTALLED"
-say "  agent files total   : $AGENT_TOTAL"
-say "  skills written      : $SKILLS_INSTALLED"
-say "  skills total        : $SKILL_SOURCE_COUNT"
-say "  plugin installed    : $PLUGIN_NAME"
-say "  files written      : $INSTALLED_FILES"
-say "  files skipped      : $SKIPPED_FILES"
+# The summary is the whole run in numbers: every file of the source tree is
+# either written (or planned) or skipped, and the total line makes the
+# arithmetic checkable. A dry run says "to install" rather than "written",
+# because it reported the plan and wrote nothing.
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "  dry run            : nothing was written"
+  say "  agents to install   : $AGENTS_INSTALLED"
+  say "  agent files total   : $AGENT_TOTAL"
+  say "  skills to install   : $SKILLS_INSTALLED"
+  say "  skills total        : $SKILL_SOURCE_COUNT"
+  say "  plugin to install   : $PLUGIN_NAME"
+  say "  files to install    : $WOULD_WRITE_FILES"
+  say "  files skipped       : $SKIPPED_FILES"
+  say "  files total         : $((WOULD_WRITE_FILES + SKIPPED_FILES))"
+  say "  dry run             : nothing was written"
+else
+  say "  agents written      : $AGENTS_INSTALLED"
+  say "  agent files total   : $AGENT_TOTAL"
+  say "  skills written      : $SKILLS_INSTALLED"
+  say "  skills total        : $SKILL_SOURCE_COUNT"
+  say "  plugin installed    : $PLUGIN_NAME"
+  say "  files written      : $INSTALLED_FILES"
+  say "  files skipped      : $SKIPPED_FILES"
+  say "  files total         : $((INSTALLED_FILES + SKIPPED_FILES))"
 fi
 say ""
 say "  Next steps:"
