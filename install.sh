@@ -47,16 +47,16 @@ Install the wippaAGENT agent set into OpenCode.
 Scope:
   --global            Install into ~/.config/opencode/          (default)
   --project [DIR]     Install into <DIR>/.opencode/              (DIR defaults to
-                      the current directory)
+                      the current directory; --project=DIR is also accepted)
 
 Options:
   --dry-run           Print every planned action and write nothing
   --force             Overwrite files that already exist
   --uninstall         Remove the agent files, the skills and the plugin this
                       installer placed in the target
-  --apply-config      Merge the required keys into the target opencode.json
-                      (JSON or JSONC) without changing values that are already
-                      set; validate it before copying anything
+  --apply-config      Add missing keys, keep your values; migrate the demoted
+                      agents.build this installer wrote to disabled: true with
+                      your keys kept; validate before copying; JSONC accepted.
   -h, --help          Print this help and exit
 
 Environment:

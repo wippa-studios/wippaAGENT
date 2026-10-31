@@ -221,7 +221,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | Flag | Effect |
 |------|--------|
 | `--global` | Install into `~/.config/opencode/`, or into `$OPENCODE_CONFIG_DIR` when that variable is set. This is the default. |
-| `--project [DIR]` | Install into `<DIR>/.opencode/`. `DIR` defaults to the current directory. |
+| `--project [DIR]` | Install into `<DIR>/.opencode/`. `DIR` defaults to the current directory. The `--project=DIR` form is also accepted. |
 | `--dry-run` | Print every planned action and write nothing. |
 | `--force` | Overwrite files that already exist. |
 | `--uninstall` | Remove the agent files, the skills and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
