@@ -1,0 +1,5 @@
+# README.md carries the centred <pre> wordmark. Each art row is padded to the
+# same width so a centred renderer keeps the glyph grid aligned; without the
+# padding every line is centred independently and the art shears. That padding
+# is trailing whitespace by design, so the whitespace check excludes this path.
+README.md whitespace=-trailing-space

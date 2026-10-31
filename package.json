@@ -21,8 +21,10 @@
     "test": "node --test \"**/*.test.ts\"",
     "eval": "node evals/run.ts",
     "check:claims": "node scripts/check-claims.mjs",
-    "check:tokens": "node scripts/token-count.mjs --max 110000 --max-skills 1000",
+    "check:tokens": "node scripts/token-count.mjs --max 35000 --max-skills 1250 --max-agent 3000",
     "check:smoke": "node scripts/opencode-smoke.mjs",
+    "test:quiet": "node --test --test-reporter=dot \"**/*.test.ts\"",
+    "wordmark": "node scripts/wordmark.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {

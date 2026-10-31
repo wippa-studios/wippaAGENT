@@ -18,6 +18,33 @@ import { fileURLToPath } from "node:url"
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const INSTALLER = join(REPO_ROOT, "install.sh")
 const CATEGORIES_DIR = join(REPO_ROOT, "categories")
+const INSTALLER_SOURCE = readFileSync(INSTALLER, "utf8")
+
+/**
+ * The wordmark exactly as install.sh prints it: the body of the `<<'BANNER'`
+ * heredoc, with trailing whitespace stripped from every line.
+ */
+function bannerArt(): string[] {
+  const lines = INSTALLER_SOURCE.split("\n")
+  const open = lines.findIndex((line) => line.includes("<<'BANNER'"))
+  assert.notEqual(open, -1, "install.sh must print the wordmark from a BANNER heredoc")
+  const close = lines.indexOf("BANNER", open + 1)
+  assert.notEqual(close, -1, "the BANNER heredoc must be closed")
+  return lines.slice(open + 1, close).map((line) => line.replace(/\s+$/, ""))
+}
+
+/** The widest banner line, declared once in install.sh as BANNER_WIDTH. */
+function bannerWidth(): number {
+  const match = INSTALLER_SOURCE.match(/^BANNER_WIDTH=(\d+)$/m)
+  assert.ok(match, "install.sh must declare BANNER_WIDTH as a number")
+  return Number(match[1])
+}
+
+const BANNER_ART = bannerArt()
+const BANNER_WIDTH = bannerWidth()
+/** The first and last art rows; only the banner prints them. */
+const BANNER_FIRST = BANNER_ART[0]
+const BANNER_LAST = BANNER_ART[BANNER_ART.length - 1]
 
 interface RunResult {
   status: number | null
@@ -28,6 +55,51 @@ interface RunResult {
 function runInstaller(...args: string[]): RunResult {
   const result = spawnSync("bash", [INSTALLER, ...args], { encoding: "utf8" })
   return { status: result.status, output: `${result.stdout}${result.stderr}` }
+}
+
+/**
+ * Runs the installer with `WIPPA_BANNER` removed from the inherited
+ * environment, then the given variables applied. The banner guard must never
+ * depend on the shell that happens to run the tests.
+ */
+function runInstallerWithEnv(env: Record<string, string>, ...args: string[]): RunResult {
+  const childEnv = { ...process.env }
+  delete childEnv.WIPPA_BANNER
+  const result = spawnSync("bash", [INSTALLER, ...args], {
+    encoding: "utf8",
+    env: { ...childEnv, ...env },
+  })
+  return { status: result.status, output: `${result.stdout}${result.stderr}` }
+}
+
+/** One shell word, safe for the command string `script` passes to a shell. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * Runs the installer with stdout attached to a pseudo-terminal of the given
+ * width, so the banner's terminal checks are exercised. `script` is util-linux:
+ * -q silences its own messages, -e returns the child's status and -c runs the
+ * command. A platform without that `script` skips the caller's test.
+ */
+function runInstallerInTerminal(columns: number, ...args: string[]): RunResult {
+  const childEnv = { ...process.env }
+  delete childEnv.WIPPA_BANNER
+  const command = ["bash", INSTALLER, ...args].map(shellQuote).join(" ")
+  const result = spawnSync("script", ["-q", "-e", "-c", command, "/dev/null"], {
+    encoding: "utf8",
+    env: { ...childEnv, COLUMNS: String(columns), LC_ALL: "en_US.UTF-8" },
+  })
+  return {
+    status: result.status,
+    output: `${result.stdout}${result.stderr}`.replace(/\r\n/g, "\n"),
+  }
+}
+
+/** Whether the output carries `line` as a whole line. */
+function outputHasLine(output: string, line: string): boolean {
+  return output.split("\n").includes(line)
 }
 
 function projectDir(): string {
@@ -272,11 +344,114 @@ test("--apply-config merges the required keys and keeps existing values", () => 
   assert.equal(config.theme, "dark")
   assert.deepEqual(config.agents.general, { disabled: true })
   assert.deepEqual(config.agents.explore, { disabled: true })
-  assert.equal(config.agents.build.mode, "subagent")
+  assert.equal(config.agents.build.disabled, true)
   assert.equal(config.mcp.servers.github.type, "remote")
   assert.equal(config.mcp.servers.context7.type, "remote")
   assert.equal(config.mcp.servers.playwright.type, "local")
   assert.match(result.output, /kept\s+default_agent/)
+})
+
+test("--apply-config upgrades the build entry a previous installer wrote", () => {
+  const dir = projectDir()
+  const configPath = writeConfig(
+    dir,
+    `${JSON.stringify(
+      {
+        default_agent: "mine",
+        theme: "dark",
+        agents: {
+          build: {
+            mode: "subagent",
+            description: "Writes and changes code.",
+            model: "user-model",
+            temperature: 0.2,
+            permissions: [{ action: "subagent", resource: "*", effect: "deny" }],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
+  const result = runInstaller("--project", dir, "--apply-config")
+
+  assert.equal(result.status, 0, result.output)
+  const config = JSON.parse(readFileSync(configPath, "utf8"))
+  assert.equal(config.agents.build.disabled, true, "the built-in is disabled")
+  assert.equal("mode" in config.agents.build, false, "the demoting mode key is removed")
+  assert.equal(
+    "permissions" in config.agents.build,
+    false,
+    "the demoting permissions key is removed",
+  )
+  assert.equal(config.agents.build.model, "user-model", "a user model survives the migration")
+  assert.equal(config.agents.build.temperature, 0.2, "a user temperature survives the migration")
+  assert.equal(
+    config.agents.build.description,
+    "Writes and changes code.",
+    "the installer's own description is kept",
+  )
+  assert.equal(config.default_agent, "mine", "the personal part of the config is untouched")
+  assert.equal(config.theme, "dark")
+  assert.match(result.output, /replaced\s+agents\.build \(previously demoted shape\)/)
+  assert.ok(
+    !/kept\s+agents\.build\b/.test(result.output),
+    "a replaced entry is not also reported as kept",
+  )
+})
+
+test("--apply-config preserves a build entry it did not write", () => {
+  const dir = projectDir()
+  const original = `${JSON.stringify(
+    {
+      default_agent: "wippaAGENT",
+      agents: {
+        general: { disabled: true },
+        explore: { disabled: true },
+        build: { mode: "primary", description: "mine" },
+      },
+      mcp: {
+        servers: {
+          github: {
+            type: "remote",
+            url: "https://api.githubcopilot.com/mcp/",
+            oauth: false,
+            headers: {
+              Authorization: "Bearer {env:GITHUB_PERSONAL_ACCESS_TOKEN}",
+              "X-MCP-Toolsets": "repos,issues,pull_requests,actions",
+            },
+          },
+          context7: {
+            type: "remote",
+            url: "https://mcp.context7.com/mcp",
+            oauth: false,
+          },
+          playwright: {
+            type: "local",
+            command: ["npx", "--yes", "@playwright/mcp@0.0.83", "--isolated"],
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`
+  const configPath = writeConfig(dir, original)
+
+  const result = runInstaller("--project", dir, "--apply-config")
+
+  assert.equal(result.status, 0, result.output)
+  assert.equal(
+    readFileSync(configPath, "utf8"),
+    original,
+    "no key was added, so the file is preserved byte-for-byte",
+  )
+  assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).agents.build, {
+    mode: "primary",
+    description: "mine",
+  })
+  assert.match(result.output, /kept\s+agents\.build\b/)
 })
 
 test("--apply-config accepts JSONC comments and trailing commas", () => {
@@ -361,4 +536,99 @@ test("an install without --apply-config leaves an existing config byte-identical
   assert.equal(result.status, 0, result.output)
   assert.equal(readFileSync(configPath, "utf8"), original)
   assert.equal(statSync(configPath).size, original.length)
+})
+
+test("piped output without WIPPA_BANNER contains no banner", () => {
+  const dir = projectDir()
+  const result = runInstallerWithEnv({}, "--project", dir, "--dry-run")
+
+  assert.equal(result.status, 0, result.output)
+  assert.ok(!outputHasLine(result.output, BANNER_FIRST), "the banner is terminal-only by default")
+  assert.ok(!outputHasLine(result.output, BANNER_LAST), "the banner is terminal-only by default")
+})
+
+test("a wide UTF-8 pipe without WIPPA_BANNER still contains no banner", () => {
+  const dir = projectDir()
+  const result = runInstallerWithEnv(
+    { COLUMNS: String(BANNER_WIDTH), LC_ALL: "en_US.UTF-8" },
+    "--project",
+    dir,
+    "--dry-run",
+  )
+
+  assert.equal(result.status, 0, result.output)
+  assert.ok(
+    !outputHasLine(result.output, BANNER_FIRST),
+    "a pipe is not a terminal, however wide and UTF-8 it claims to be",
+  )
+})
+
+test("the banner guard turns on at exactly BANNER_WIDTH terminal columns", (t) => {
+  if (spawnSync("script", ["--version"], { encoding: "utf8" }).status !== 0) {
+    t.skip("a util-linux script is needed to provide a pseudo-terminal")
+    return
+  }
+  const dir = projectDir()
+
+  // One column below the art: the guard must suppress it.
+  const narrow = runInstallerInTerminal(BANNER_WIDTH - 1, "--project", dir, "--dry-run")
+  assert.equal(narrow.status, 0, narrow.output)
+  assert.ok(
+    !outputHasLine(narrow.output, BANNER_FIRST),
+    "a terminal one column narrower than the art suppresses the banner",
+  )
+
+  // Exactly as wide as the art: the guard must print it.
+  const wide = runInstallerInTerminal(BANNER_WIDTH, "--project", dir, "--dry-run")
+  assert.equal(wide.status, 0, wide.output)
+  assert.ok(outputHasLine(wide.output, BANNER_FIRST), "the first art row is printed")
+  assert.ok(outputHasLine(wide.output, BANNER_LAST), "the last art row is printed")
+})
+
+test("WIPPA_BANNER=on prints the banner on a piped run", () => {
+  const dir = projectDir()
+  const result = runInstallerWithEnv({ WIPPA_BANNER: "on" }, "--project", dir, "--dry-run")
+
+  assert.equal(result.status, 0, result.output)
+  const lines = result.output.split("\n")
+  const start = lines.indexOf(BANNER_FIRST)
+  assert.notEqual(start, -1, "the banner is printed")
+  assert.equal(start, 0, "the banner is printed above the header")
+  assert.equal(
+    BANNER_WIDTH,
+    Math.max(...BANNER_ART.map((line) => [...line].length)),
+    "BANNER_WIDTH must equal the widest line of the printed wordmark",
+  )
+  assert.deepEqual(
+    lines.slice(start, start + BANNER_ART.length),
+    BANNER_ART,
+    "every printed banner line must match the art in install.sh",
+  )
+  assert.equal(lines[start + BANNER_ART.length], "", "the banner is followed by one blank line")
+  assert.equal(
+    lines[start + BANNER_ART.length + 1],
+    "wippaAGENT installer",
+    "the header follows the banner",
+  )
+  assert.ok(outputHasLine(result.output, BANNER_LAST), "the last art row is printed")
+})
+
+test("WIPPA_BANNER=off suppresses the banner on a piped run", () => {
+  const dir = projectDir()
+  for (const value of ["off", "OFF"]) {
+    const result = runInstallerWithEnv({ WIPPA_BANNER: value }, "--project", dir, "--dry-run")
+
+    assert.equal(result.status, 0, result.output)
+    assert.ok(!outputHasLine(result.output, BANNER_FIRST), `${value} wins over any terminal check`)
+    assert.ok(!outputHasLine(result.output, BANNER_LAST), `${value} wins over any terminal check`)
+  }
+})
+
+test("--help never prints the banner", () => {
+  const result = runInstallerWithEnv({ WIPPA_BANNER: "on" }, "--help")
+
+  assert.equal(result.status, 0, result.output)
+  assert.ok(!outputHasLine(result.output, BANNER_FIRST), "usage never prints the banner")
+  assert.ok(!outputHasLine(result.output, BANNER_LAST), "usage never prints the banner")
+  assert.match(result.output, /Usage: install\.sh/)
 })

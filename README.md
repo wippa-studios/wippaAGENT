@@ -1,6 +1,7 @@
 <div align="center">
 
-<pre>
+<!-- wordmark:start - generated from the install.sh banner by npm run wordmark -->
+<pre role="img" aria-label="wippaAGENT">
 ██╗    ██╗██╗██████╗ ██████╗  █████╗        
 ██║    ██║██║██╔══██╗██╔══██╗██╔══██╗       
 ██║ █╗ ██║██║██████╔╝██████╔╝███████║       
@@ -13,8 +14,9 @@
 ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   
 ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   
 ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   
-╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝  
+╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   
 </pre>
+<!-- wordmark:end -->
 
 ### The only OpenCode setup you'll need.
 
@@ -166,7 +168,7 @@ flowchart TB
 
 ### Prompt budget
 
-The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **110,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,000 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included. Around the list OpenCode emits a fixed prologue and an `<available_skills>` wrapper — about **110 estimated tokens**, reported separately by the script; the full always-on skill surface today is about **1,075 estimated tokens**.
+The prompt corpus — the primary agent plus the twelve subagents — is budgeted at **35,000 estimated tokens** (one token taken as four characters) and enforced by `npm run check:tokens` in CI. The largest single **subagent** definition carries its own **3,000 estimated token** ceiling, because that prompt is paid on every turn of every dispatch, while the primary agent is covered by the corpus total. Skills split the cost in two: their bodies load only when a skill is called, but OpenCode advertises each skill's id, name and description at every model step, so that always-on listing carries its own **1,250 estimated token** ceiling. `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included. Around the list OpenCode emits a fixed prologue and an `<available_skills>` wrapper — about **110 estimated tokens**, reported separately by the script; the full always-on skill surface today is about **1,181 estimated tokens**.
 
 CI runs the same chain — `npm ci`, the type check, the test suite, `check:claims`, `check:tokens`, the installer dry run and the eval validation — plus a smoke job that loads the installed tree on a pinned OpenCode binary without credentials. A live dispatch of the eval scenarios through a model is the manual, secret-guarded `dispatch-eval` workflow; the scenario format and live mode are documented in `evals/README.md`.
 
@@ -237,7 +239,7 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | What | From | To |
 |------|------|-----|
 | Primary agent and twelve subagents | `wippaAGENT.md` and `categories/*/*.md` | `<scope>/agents/` |
-| Skills (all of `skills/`, currently six) | `skills/*/` | `<scope>/skills/*/` |
+| Skills (all of `skills/`, currently seven) | `skills/*/` | `<scope>/skills/*/` |
 | Tools plugin | `tools/` | `<scope>/plugins/wippa-subagent/` |
 
 `<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install. That is **13 agent files** in total: one primary agent plus twelve subagents.
@@ -480,7 +482,7 @@ The installer prints the full set of keys it expects before the summary, whether
 | `default_agent` | Makes `wippaAGENT` the entry point for every session. |
 | `agents.general` | Set to `disabled: true`. It is an OpenCode built-in, and this set supplies its own agents in its place. |
 | `agents.explore` | Set to `disabled: true`, for the same reason. |
-| `agents.build` | Demotes the built-in coding agent to a subagent and denies it the `subagent` action, so the orchestrator keeps control of the work and the build agent writes the code. |
+| `agents.build` | Set to `disabled: true`. It is an OpenCode built-in coding agent, and this set supplies its own implementers in its place, so no second implementer appears in the roster. |
 | `mcp.servers` | Registers the `github`, `context7` and `playwright` servers. |
 | `permissions`, `compaction`, `experimental.subagent_depth` | Checkout-only keys. They are set in the repository's own `opencode.json`: `permissions` allows `subagent` on `*`, `compaction` summarises long sessions, and `subagent_depth` is `1`, so a subagent cannot start another subagent. `--apply-config` does not merge them, so an installed scope uses OpenCode's documented defaults, which match. |
 

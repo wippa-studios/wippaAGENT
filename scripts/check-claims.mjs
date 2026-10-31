@@ -131,6 +131,53 @@ if (headingIndex === -1) {
   if (ok) {
     pass(`roster lists ${rosterIds.length} ids (incl. primary "${primaryId}"), matching categories/*/*.md (${categoryIds.length} files)`)
   }
+
+  // 4b. The quick routing table, not the roster, names the capability owner.
+  // Every subagent file needs a row here, or the agent ships unroutable.
+  const routingIndex = rosterText.search(/^## Quick routing\b/m)
+  if (routingIndex === -1) {
+    fail(`${rosterFile}: no "## Quick routing" section found`)
+  } else {
+    const routingRest = rosterText.slice(routingIndex)
+    const nextRouting = routingRest.slice(1).search(/^## /m)
+    const routingSection = nextRouting === -1 ? routingRest : routingRest.slice(0, nextRouting + 1)
+    const routingIds = []
+    for (const line of routingSection.split("\n")) {
+      if (!line.startsWith("|")) continue
+      // `| Need | \`id\` |` splits to ["", " Need ", " \`id\` ", ""].
+      const owner = line.split("|")[2]?.trim().match(/^`([^`]+)`$/)
+      if (owner) routingIds.push(owner[1])
+    }
+    let routingOk = true
+    for (const id of categoryIds) {
+      if (!routingIds.includes(id)) {
+        routingOk = false
+        fail(
+          `quick routing: agent "${id}" has no row in the "## Quick routing" table of "${rosterFile}" — it would be unroutable`,
+        )
+      }
+    }
+    for (const id of routingIds) {
+      if (!categoryIds.includes(id)) {
+        routingOk = false
+        fail(`quick routing: row "${id}" in "${rosterFile}" has no matching categories/*/${id}.md`)
+      }
+    }
+    const seen = new Set()
+    for (const id of routingIds) {
+      if (seen.has(id)) {
+        routingOk = false
+        fail(`quick routing: "${id}" has more than one row in "${rosterFile}"`)
+      }
+      seen.add(id)
+    }
+    if (routingOk) {
+      pass(
+        `quick routing table names all ${categoryIds.length} subagent ids and no others ` +
+          `(${routingIds.length} rows, each with one owner)`,
+      )
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +260,101 @@ if (readme.includes("5 Plugin tools")) {
 }
 
 // ---------------------------------------------------------------------------
+// 7. opencode.json and the installer's JSON template agree on everything
+//    --apply-config writes: the default agent, the whole `agents` object and
+//    the whole `mcp.servers` object, every URL and command included. The two
+//    sides are compared key by key; a change to one without the other would
+//    ship two different products depending on how a scope was created.
+// ---------------------------------------------------------------------------
+const templateMatch = installSh.match(/cat <<'JSON'\n([\s\S]*?)\nJSON\n/)
+if (!templateMatch) {
+  fail("install.sh: no `cat <<'JSON'` … `JSON` template found for the --apply-config keys")
+} else {
+  let template
+  try {
+    template = JSON.parse(templateMatch[1])
+  } catch (error) {
+    fail(`install.sh: the \`cat <<'JSON'\` template does not parse: ${error.message}`)
+  }
+  if (template) {
+    let drift = 0
+    /** Key-sorted JSON at every level, so key order is never read as a value change. */
+    const stableStringify = (value) => {
+      if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
+      if (value !== null && typeof value === "object") {
+        return `{${Object.keys(value)
+          .sort()
+          .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+          .join(",")}}`
+      }
+      return JSON.stringify(value)
+    }
+    /** The first path at which two values differ, with both sides, or null. */
+    const firstDifference = (configValue, templateValue, path) => {
+      if (stableStringify(configValue) === stableStringify(templateValue)) return null
+      const bothObjects =
+        configValue !== null &&
+        templateValue !== null &&
+        typeof configValue === "object" &&
+        typeof templateValue === "object" &&
+        !Array.isArray(configValue) &&
+        !Array.isArray(templateValue)
+      if (bothObjects) {
+        const keys = [...new Set([...Object.keys(configValue), ...Object.keys(templateValue)])].sort()
+        for (const key of keys) {
+          const difference = firstDifference(configValue[key], templateValue[key], `${path}.${key}`)
+          if (difference) return difference
+        }
+      }
+      if (Array.isArray(configValue) && Array.isArray(templateValue)) {
+        const length = Math.max(configValue.length, templateValue.length)
+        for (let index = 0; index < length; index++) {
+          const difference = firstDifference(
+            configValue[index],
+            templateValue[index],
+            `${path}[${index}]`,
+          )
+          if (difference) return difference
+        }
+      }
+      return { path, configValue, templateValue }
+    }
+    const compare = (claim, configValue, templateValue) => {
+      const difference = firstDifference(configValue, templateValue, claim)
+      if (!difference) return
+      drift++
+      fail(
+        `config/template drift: ${difference.path} is ${JSON.stringify(difference.configValue)} in opencode.json ` +
+          `but ${JSON.stringify(difference.templateValue)} in the install.sh template`,
+      )
+    }
+
+    compare("default_agent", opencode.default_agent, template.default_agent)
+    compare("agents", opencode.agents, template.agents)
+    compare("mcp.servers", opencode.mcp?.servers, template.mcp?.servers)
+
+    // The two sides can agree and both still carry the demoted shape the
+    // installer now migrates away. The shipped built-ins are disabled
+    // outright, so assert that shape as well as the agreement.
+    for (const id of ["general", "explore", "build"]) {
+      const entry = template.agents?.[id]
+      if (stableStringify(entry) !== stableStringify({ disabled: true })) {
+        drift++
+        fail(
+          `config/template drift: agents.${id} is ${JSON.stringify(entry)} in the install.sh template, ` +
+            `but a built-in must be exactly {"disabled":true}`,
+        )
+      }
+    }
+    if (drift === 0) {
+      pass(
+        "opencode.json matches the install.sh JSON template: default_agent, the whole agents object (built-ins exactly {disabled:true}) and the whole mcp.servers object, compared key by key",
+      )
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 8. The installer ships every skill directory, not a hardcoded subset. The
 //    copy path is a glob loop over skills/*/; if that loop is ever replaced by
 //    an explicit list, every skill directory must still appear in the copy and
@@ -224,6 +366,17 @@ const skillNames = (() => {
   if (!existsSync(dir)) return []
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "SKILL.md")))
+    .map((entry) => entry.name)
+    .sort()
+})()
+// The installer counts every directory under skills/, whether or not it holds a
+// SKILL.md, so the prose count has to use the same total. Assertion 10 fails
+// when the two lists disagree.
+const skillDirNames = (() => {
+  const dir = join(ROOT, "skills")
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort()
 })()
@@ -273,6 +426,68 @@ for (const rel of pointerFiles) {
 }
 if (dangling === 0) {
   pass(`every "skill \`X\`" pointer in wippaAGENT.md and categories/*/*.md resolves to a SKILL.md`)
+}
+
+// ---------------------------------------------------------------------------
+// 10. The skill count stated in prose matches skills/. The README and the
+//     capability map both spell the count as a word, so adding or removing a
+//     skill directory without moving both surfaces must fail the build.
+// ---------------------------------------------------------------------------
+const NUMBER_WORDS = [
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+  "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+  "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+]
+/** Spell 0–20, or null outside the range this claim can express. */
+function numberWord(n) {
+  return NUMBER_WORDS[n] ?? null
+}
+
+const expectedSkillWord = numberWord(skillDirNames.length)
+const expectedOtherWord = numberWord(skillDirNames.length - 1)
+const readmeSkill = readme.match(/Skills \(all of `skills\/`, currently ([a-z]+)\)/)
+const capabilityMap = read("docs/tool-capability-map.md")
+const mapSkill = capabilityMap.match(/^One primary agent,.*\b([a-z]+) skills/m)
+const mapLoads = capabilityMap.match(/The ([a-z]+) skills under `skills\/` load on demand/)
+const mapOther = capabilityMap.match(/The other ([a-z]+) —/)
+const readmeSkillValue = readmeSkill ? `"${readmeSkill[1]}"` : "no count"
+const mapSkillValue = mapSkill ? `"${mapSkill[1]}"` : "no count"
+const mapLoadsValue = mapLoads ? `"${mapLoads[1]}"` : "no count"
+const mapOtherValue = mapOther ? `"${mapOther[1]}"` : "no count"
+
+for (const name of skillDirNames) {
+  if (!existsSync(join(ROOT, "skills", name, "SKILL.md"))) {
+    fail(
+      `skill count: skills/${name}/ has no SKILL.md, so the installer would count it but the listing would not`,
+    )
+  }
+}
+
+if (!expectedSkillWord) {
+  fail(
+    `skill count: skills/ holds ${skillDirNames.length} skill directories, outside the 0–20 range this assertion can spell`,
+  )
+} else if (
+  !readmeSkill ||
+  !mapSkill ||
+  !mapLoads ||
+  !mapOther ||
+  readmeSkill[1] !== expectedSkillWord ||
+  mapSkill[1] !== expectedSkillWord ||
+  mapLoads[1] !== expectedSkillWord ||
+  mapOther[1] !== expectedOtherWord
+) {
+  fail(
+    `skill count: skills/ holds ${skillDirNames.length} skill directories, so README.md and the docs summary must say "${expectedSkillWord} skills", ` +
+      `and docs/tool-capability-map.md must say "The ${expectedSkillWord} skills" and "The other ${expectedOtherWord}"; ` +
+      `README.md says ${readmeSkillValue}, the summary line says ${mapSkillValue}, ` +
+      `"The … skills under \`skills/\`" says ${mapLoadsValue}, "The other …" says ${mapOtherValue}`,
+  )
+} else {
+  pass(
+    `README.md and docs/tool-capability-map.md match ${skillDirNames.length} skill directories ` +
+      `("${expectedSkillWord} skills", then "${expectedOtherWord}" in the capability map)`,
+  )
 }
 
 // ---------------------------------------------------------------------------

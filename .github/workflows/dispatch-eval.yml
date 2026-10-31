@@ -6,7 +6,7 @@ name: Dispatch eval
 #
 # Required repository secrets:
 #
-#   OPENCODE_EVAL_MODEL    provider/model, for example "anthropic/claude-sonnet-5-5"
+#   OPENCODE_EVAL_MODEL    the model to dispatch, as provider/model
 #   OPENCODE_EVAL_API_KEY  an API key for that provider
 #
 # Without BOTH secrets the job prints a notice and exits green: public CI has

@@ -20,6 +20,10 @@ REPOSITORY="wippa-studios/wippaAGENT"
 PRIMARY_AGENT_FILE="wippaAGENT.md"
 PLUGIN_NAME="wippa-subagent"
 
+# Widest line of the wordmark below, in characters, measured with awk over the
+# art after trailing whitespace was stripped.
+BANNER_WIDTH=44
+
 SCOPE="global"
 PROJECT_DIR=""
 DRY_RUN=0
@@ -55,6 +59,10 @@ Options:
                       set; validate it before copying anything
   -h, --help          Print this help and exit
 
+Environment:
+  WIPPA_BANNER=on|off  Force or suppress the wordmark; unset prints it only when the terminal
+                      is wide enough for the art and the locale is UTF-8
+
 Examples:
   ./install.sh
   ./install.sh --global
@@ -71,6 +79,50 @@ EOF
 
 say() {
   printf '%s\n' "$*"
+}
+
+# Print the wordmark above the installer header. WIPPA_BANNER=off always
+# suppresses it, WIPPA_BANNER=on always prints it, and any other value prints
+# it only on a terminal wide enough to hold the art in a UTF-8 locale. No
+# colour and no escape sequences.
+print_banner() {
+  case "${WIPPA_BANNER:-}" in
+    [Oo][Ff][Ff])
+      return 0
+      ;;
+    [Oo][Nn])
+      ;;
+    *)
+      [ -t 1 ] || return 0
+      local terminal_width
+      terminal_width="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+      case "$terminal_width" in
+        ''|*[!0-9]*) return 0 ;;
+      esac
+      [ "$terminal_width" -ge "$BANNER_WIDTH" ] || return 0
+      case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8*|*utf-8*|*UTF8*|*utf8*) ;;
+        *) return 0 ;;
+      esac
+      ;;
+  esac
+
+  cat <<'BANNER'
+██╗    ██╗██╗██████╗ ██████╗  █████╗
+██║    ██║██║██╔══██╗██╔══██╗██╔══██╗
+██║ █╗ ██║██║██████╔╝██████╔╝███████║
+██║███╗██║██║██╔═══╝ ██╔═══╝ ██╔══██║
+╚███╔███╔╝██║██║     ██║     ██║  ██║
+ ╚══╝╚══╝ ╚═╝╚═╝     ╚═╝     ╚═╝  ╚═╝
+
+ █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+BANNER
+  printf '\n'
 }
 
 step() {
@@ -318,13 +370,7 @@ print_config_keys() {
   "agents": {
     "general": { "disabled": true },
     "explore": { "disabled": true },
-    "build": {
-      "mode": "subagent",
-      "description": "Writes and changes code. The implementation specialist — hands for substantial coding work when the parent agent delegates. Use directly only for a single well-scoped coding task.",
-      "permissions": [
-        { "action": "subagent", "resource": "*", "effect": "deny" }
-      ]
-    }
+    "build": { "disabled": true }
   },
   "mcp": {
     "servers": {
@@ -432,6 +478,7 @@ function parseJsonc(raw) {
 }
 
 const added = [];
+const replaced = [];
 const kept = [];
 
 let config = {};
@@ -478,6 +525,28 @@ function put(container, key, value, label) {
   added.push(label);
 }
 
+// True only for the exact demoted shape a previous installer wrote:
+// { mode: 'subagent', description: …, permissions: [{ action: 'subagent',
+// resource: '*', effect: 'deny' }] }. Requiring every part of that predicate
+// means a hand-edited build entry is never replaced, even if it also demotes
+// the built-in, so the installer still only overwrites what it put there.
+// The migration removes only the two keys that demoted the built-in, `mode`
+// and `permissions`; every other key on the entry is preserved.
+function isPreviouslyDemotedBuild(value) {
+  return (
+    isPlainObject(value) &&
+    value.mode === 'subagent' &&
+    Array.isArray(value.permissions) &&
+    value.permissions.some(
+      (entry) =>
+        isPlainObject(entry) &&
+        entry.action === 'subagent' &&
+        entry.resource === '*' &&
+        entry.effect === 'deny',
+    )
+  );
+}
+
 put(config, 'default_agent', 'wippaAGENT', 'default_agent');
 
 if (!Object.prototype.hasOwnProperty.call(config, 'agents') || config.agents === null) {
@@ -485,13 +554,22 @@ if (!Object.prototype.hasOwnProperty.call(config, 'agents') || config.agents ===
 }
 put(config.agents, 'general', { disabled: true }, 'agents.general');
 put(config.agents, 'explore', { disabled: true }, 'agents.explore');
-put(config.agents, 'build', {
-  mode: 'subagent',
-  description: 'Writes and changes code. The implementation specialist — hands for substantial coding work when the parent agent delegates. Use directly only for a single well-scoped coding task.',
-  permissions: [
-    { action: 'subagent', resource: '*', effect: 'deny' },
-  ],
-}, 'agents.build');
+
+// Migrate the build entry this installer used to write before it disabled the
+// built-in outright, so an existing installation reaches the same state as a
+// fresh one. Only the two keys that did the demoting are removed; a user's
+// model, temperature, description or anything else on the entry stays put.
+// Any other shape is kept through put(), as it was before.
+if (isPreviouslyDemotedBuild(config.agents.build)) {
+  const migrated = { ...config.agents.build };
+  delete migrated.mode;
+  delete migrated.permissions;
+  migrated.disabled = true;
+  config.agents.build = migrated;
+  replaced.push('agents.build (previously demoted shape)');
+} else {
+  put(config.agents, 'build', { disabled: true }, 'agents.build');
+}
 
 if (!Object.prototype.hasOwnProperty.call(config, 'mcp') || config.mcp === null) {
   config.mcp = {};
@@ -521,7 +599,7 @@ put(servers, 'playwright', {
 
 // Every key is already present, so the file needs no change. Skipping the write
 // keeps the user's comments, formatting and trailing commas intact.
-if (added.length === 0) {
+if (added.length === 0 && replaced.length === 0) {
   for (const label of kept) {
     console.log(`  kept       ${label} (already present)`);
   }
@@ -579,6 +657,9 @@ try {
 for (const label of added) {
   console.log(`  added      ${label}`);
 }
+for (const label of replaced) {
+  console.log(`  replaced   ${label}`);
+}
 for (const label of kept) {
   console.log(`  kept       ${label} (already present)`);
 }
@@ -609,6 +690,7 @@ apply_config() {
 # --------------------------------------------------------------- uninstall
 
 if [ "$UNINSTALL" -eq 1 ]; then
+  print_banner
   say "wippaAGENT installer"
   say "source   : $SCRIPT_DIR"
   say "target   : $TARGET_DIR"
@@ -701,6 +783,7 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   SKILL_SOURCE_COUNT=$((SKILL_SOURCE_COUNT + 1))
 done
 
+print_banner
 say "wippaAGENT installer"
 say "source   : $SCRIPT_DIR"
 say "target   : $TARGET_DIR"
@@ -730,7 +813,9 @@ done
 AGENTS_INSTALLED=$((INSTALLED_FILES + WOULD_WRITE_FILES - AGENTS_BEFORE))
 
 step "2. Skills ($SKILL_SOURCE_COUNT)"
-SKILLS_BEFORE=$((INSTALLED_FILES + WOULD_WRITE_FILES))
+# A skill can hold several files now, so count the directory once when any of
+# its files is written or planned. `files written` below still counts each file.
+SKILLS_INSTALLED=0
 if [ "$DRY_RUN" -eq 0 ] && [ "$SKILL_SOURCE_COUNT" -gt 0 ]; then
   mkdir -p "$SKILLS_DIR"
 fi
@@ -738,9 +823,13 @@ for src in "$SCRIPT_DIR"/skills/*/; do
   [ -d "$src" ] || continue
   name="${src%/}"
   name="${name##*/}"
+  before=$((INSTALLED_FILES + WOULD_WRITE_FILES))
   copy_tree "$SCRIPT_DIR/skills/$name" "$SKILLS_DIR/$name"
+  after=$((INSTALLED_FILES + WOULD_WRITE_FILES))
+  if [ "$after" -gt "$before" ]; then
+    SKILLS_INSTALLED=$((SKILLS_INSTALLED + 1))
+  fi
 done
-SKILLS_INSTALLED=$((INSTALLED_FILES + WOULD_WRITE_FILES - SKILLS_BEFORE))
 
 step "3. Tools plugin ($PLUGIN_NAME)"
 if [ -d "$SCRIPT_DIR/tools" ]; then
@@ -765,6 +854,8 @@ step "Summary"
 # either written (or planned) or skipped, and the total line makes the
 # arithmetic checkable. A dry run says "to install" rather than "written",
 # because it reported the plan and wrote nothing.
+# `skills` counts skill directories touched, not files; `files` counts every
+# copied file. The difference is expected now that a skill can hold references.
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  agents to install   : $AGENTS_INSTALLED"
   say "  agent files total   : $AGENT_TOTAL"
