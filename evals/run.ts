@@ -31,6 +31,8 @@ export interface Scenario {
   criteria: string[]
   /** Absent when the acceptance command is `None`. */
   command?: string
+  /** Literal phrases the dispatched report must contain; checked in live mode only. */
+  report: string[]
   /** Format problems found while parsing. */
   problems: string[]
 }
@@ -114,12 +116,21 @@ export function parseScenario(text: string, file: string): Scenario {
     return lines
   }
 
+  const optional = (heading: string): string[] => {
+    const lines = found.get(heading.toLowerCase())
+    if (lines === undefined) return []
+    const values = items(lines)
+    if (values.length === 0) problems.push(`empty section "## ${heading}"`)
+    return values
+  }
+
   const nameLines = require("Scenario")
   const intentLines = require("Intent")
   const primaryLines = require("Expected primary agent")
   const subagentLines = require("Expected subagent(s)")
   const criteriaLines = require("Acceptance criteria")
   const commandLines = require("Acceptance command")
+  const report = optional("Report must mention")
 
   const name = items(nameLines)[0] ?? ""
   const expectedName = basename(file, ".md")
@@ -167,8 +178,19 @@ export function parseScenario(text: string, file: string): Scenario {
     subagents,
     criteria,
     ...(command === undefined ? {} : { command }),
+    report,
     problems,
   }
+}
+
+/**
+ * The literal phrases the report is missing, compared case-insensitively. The
+ * terms are authored for a human reader, so the match is a plain substring
+ * test rather than a pattern.
+ */
+export function missingReportTerms(scenario: Scenario, output: string): string[] {
+  const haystack = output.toLowerCase()
+  return scenario.report.filter((term) => !haystack.includes(term.toLowerCase()))
 }
 
 /** Checks the agents a scenario names against the catalog on disk. */
@@ -571,6 +593,9 @@ async function main(argv: string[]): Promise<number> {
     }
     if (scenario.command) console.log(`  command   : ${scenario.command}`)
     else console.log("  command   : none")
+    if (scenario.report.length > 0) {
+      console.log(`  report    : ${scenario.report.length} required term(s)`)
+    }
 
     if (problems.length > 0) {
       failed += 1
@@ -605,6 +630,16 @@ async function main(argv: string[]): Promise<number> {
         continue
       }
       console.log(`  dispatched (exit 0, ${dispatch.durationMs}ms)`)
+      if (scenario.report.length > 0) {
+        const missing = missingReportTerms(scenario, `${dispatch.stdout}\n${dispatch.stderr}`)
+        if (missing.length > 0) {
+          failed += 1
+          console.log("  FAIL (report missing required terms)")
+          for (const term of missing) console.log(`    - ${term}`)
+          continue
+        }
+        console.log(`  report    : matched ${scenario.report.length} required term(s)`)
+      }
       if (!scenario.command) {
         passed += 1
         console.log("  PASS (dispatched; the report itself is the evidence)")

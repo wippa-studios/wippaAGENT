@@ -197,12 +197,12 @@ These identifiers could not be checked against a registry or a vendor document w
 
 ## How this bundle maps onto OpenCode
 
-One primary agent, twelve subagents, three MCP servers, six tools and six skills.
+One primary agent, twelve subagents, three MCP servers, six tools and seven skills.
 
 - The primary agent is `wippaAGENT.md` at the repository root. It plans, delegates, reviews, integrates and reports. Its frontmatter denies `edit` and `shell` and allows `subagent`, so it never writes code; the only command it triggers is the acceptance command through the bounded `wippa_verify` tool.
-- The twelve subagents are self-contained definitions, each with `mode: subagent` and shell guards on `rm -rf *` and `sudo *` (deny, or `ask` for `orchestration-lead`):
+- The twelve subagents are definitions that route to on-demand playbooks, each with `mode: subagent` and shell guards on `rm -rf *` and `sudo *` (deny, or `ask` for `orchestration-lead`):
 
-| Subagent | Definition | Covers |
+| Subagent | Definition | Capabilities |
 |---|---|---|
 | `core-developer` | `categories/01-core-development/core-developer.md` | API design, authentication, backend, frontend, full-stack, GraphQL, microservices, UI design, webhooks, WebSockets, Electron, mobile apps |
 | `language-specialist` | `categories/02-language-specialists/language-specialist.md` | 27 language and framework specialists |
@@ -219,7 +219,7 @@ One primary agent, twelve subagents, three MCP servers, six tools and six skills
 
 - The three MCP servers live in `opencode.json` → `mcp.servers`: `github` for issues, pull requests, review comments and CI status; `context7` for current library and framework documentation; `playwright` for browser automation in UI verification.
 - The six tools are an OpenCode plugin implemented in `tools/` and registered by `opencode.json` → `plugins`. It uses the namespace `wippa` with `codemode: false`, so the tools appear natively as `wippa_subagent_search`, `wippa_subagent_get`, `wippa_subagent_list`, `wippa_subagent_invalid`, `wippa_verify` and `wippa_diff`. `wippa_verify` asserts the `verify` permission action and then runs the acceptance command asynchronously through a shell, with a timeout, capped output and cancellation. `wippa_diff` reads the diff through `ctx.vcs.diff` and returns per-file patches, additions, deletions and status. The plugin indexes `categories/<category>/<agent>.md` when running in the repository and `<scope>/agents/<agent>.md` when running from an installed copy, and `wippa_subagent_list` groups the result by the category directory.
-- The six skills under `skills/` load on demand. `wippa-subagent-search` documents the same four operations and gives the equivalent `read`, `glob` and `grep` procedure for when the plugin is not loaded. The other five — `domain-playbooks`, `reinforcement-learning-playbooks`, `powershell-automation-playbooks`, `compliance-privacy-playbooks` and `content-legal-media-playbooks` — carry how-to playbooks that moved out of the agent definitions, so a pointer line in the relevant agent file is all each prompt pays.
+- The seven skills under `skills/` load on demand. `wippa-subagent-search` documents the same four operations and gives the equivalent `read`, `glob` and `grep` procedure for when the plugin is not loaded. The other six — `domain-playbooks`, `specialist-playbooks`, `reinforcement-learning-playbooks`, `powershell-automation-playbooks`, `compliance-privacy-playbooks` and `content-legal-media-playbooks` — carry how-to playbooks that moved out of the agent definitions, so a pointer paragraph and a routing table in the relevant agent file are all each prompt pays.
 - The installer `install.sh` flattens `categories/*/*.md` plus `wippaAGENT.md` into `<scope>/agents/`, copies every directory under `skills/` plus the tools plugin, and with `--apply-config` merges the config keys into the target `opencode.json` without overwriting values that are already set. It accepts JSONC comments and trailing commas, and validates the config before it copies any file.
 
 ## Deployment notes
@@ -229,4 +229,4 @@ One primary agent, twelve subagents, three MCP servers, six tools and six skills
 - `service.json` is not an OpenCode file and nothing in the bundle references it; no copy is shipped, and the name is listed in `.gitignore` only as a machine-local file to ignore.
 - No configuration key accepts a list of agent file paths, so the agent definitions have to sit in a discovered directory. The installer flattens them into `<scope>/agents/`, where `<scope>` is `~/.config/opencode/` for a global install and `<project>/.opencode/` for a project-local install.
 - `env.example` documents the variables the bundle reads: `GITHUB_PERSONAL_ACCESS_TOKEN` for the `github` MCP server, `WIPPA_AGENT_REGISTRY` for the `orchestration-lead` agent, and `WIPPA_AGENT_DIR`, which overrides the directories the tools plugin indexes, and `WIPPA_CUSTOM_AGENT_IDS`, which lists the agent ids the user keeps in their own global configuration; those ids are indexed alongside the roster and exempted from roster drift reporting.
-- `opencode.json` → `permissions` allows the `subagent` action on `*`, `opencode.json` → `agents` disables the `general` and `explore` built-ins and demotes the `build` built-in to a subagent, and `opencode.json` → `experimental.subagent_depth` is `1`. That key is checkout-only: `install.sh --apply-config` does not write it, and OpenCode's documented default is also 1, so an installed scope behaves the same.
+- `opencode.json` → `permissions` allows the `subagent` action on `*`, `opencode.json` → `agents` disables the `general`, `explore` and `build` built-ins, and `opencode.json` → `experimental.subagent_depth` is `1`. That key is checkout-only: `install.sh --apply-config` does not write it, and OpenCode's documented default is also 1, so an installed scope behaves the same.

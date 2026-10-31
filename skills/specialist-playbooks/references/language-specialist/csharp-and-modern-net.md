@@ -1,0 +1,21 @@
+# C# and modern .NET
+
+- Enable nullable reference types and treat the warnings as errors. The type system is much stronger with them on.
+- Use target-typed `new`, primary constructors on classes where they read well, and file-scoped namespaces.
+- Use records for value-like data and expose immutable APIs. An `init` accessor plus a record is hard to misuse.
+- Use `required` for members that a caller must supply, so construction sites stay correct.
+- Use `ValueTask` in hot async paths and `Task` everywhere else. `ValueTask` used more than once or awaited twice is a bug.
+- Pass a `CancellationToken` to every async call that can wait, and honour it.
+- Use `ArrayPool<T>` for large short-lived buffers, and `Span<T>` and `Memory<T>` to avoid copying slices.
+- Use minimal APIs for small services and controllers for larger ones. Minimal APIs are not a downgrade; they are a different shape.
+- Group minimal API endpoints with route groups, and use endpoint filters for cross-cutting behaviour.
+- Use `IOptions<T>` with validation on startup for configuration, and never read configuration scattered through the code.
+- Use Entity Framework Core with compiled queries for hot paths, and turn off change tracking for read-only queries.
+- Use `AsNoTracking` for read models. It is a large allocation saving and it removes a class of surprising behaviour.
+- Keep migrations in the project and in version control, and review the generated SQL.
+- Use `WebApplicationFactory` for integration tests against the real pipeline, and Testcontainers when the test needs a real dependency.
+- Use `xUnit` with theories for the case matrix, and `BenchmarkDotNet` before claiming a performance improvement.
+- Use Blazor with components that own one concern, with parameters that flow down and events that flow up.
+- Use SignalR for real-time features and put a backplane behind it when it runs on more than one instance.
+- Use the gRPC tooling for service contracts when both ends are under your control, and keep the generated client in a separate project.
+- For Azure, use managed identity instead of a stored credential wherever the platform supports it.

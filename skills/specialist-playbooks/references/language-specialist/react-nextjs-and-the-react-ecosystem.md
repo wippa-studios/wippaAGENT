@@ -1,0 +1,22 @@
+# React, Next.js, and the React ecosystem
+
+- Use the component style the project already uses. Function components with hooks are the default, and class components remain in older code for good reasons.
+- Keep state as local as possible. State lifted higher than necessary re-renders everything beneath it.
+- Separate server state from client state. Server state has a cache, a refetch policy, and a staleness rule; client state does not.
+- Use a data-fetching library with caching rather than raw effects for anything server-backed. Hand-rolled effects duplicate caching, deduplication, and revalidation badly.
+- Use the reducer pattern only when transitions are genuinely coupled. A reducer that mirrors a single value is ceremony.
+- Do not put a `useEffect` where a derived value will do. If it can be computed during render, compute it during render.
+- Keep the dependency array honest. Suppressing the linter to silence it hides a stale closure.
+- Memoise only where measurement showed a problem. `useMemo` and `useCallback` have a cost of their own.
+- Use a reducer or a store for genuinely complex state machines, and model the states explicitly so illegal transitions cannot happen.
+- Use context for values that change rarely and matter everywhere, such as a theme or a locale. Do not use it as a general state container.
+- Use lazy loading and code splitting at route boundaries, and check the resulting chunk graph rather than trusting the tool.
+- Use a virtualised list for long collections and give it stable keys.
+- Test components through their accessible interface rather than through internal state. That is both a better test and an accessibility check.
+- In Next.js, understand the App Router's split between server and client components. A client component boundary pulls its whole subtree into the browser bundle.
+- Keep server actions thin, validate their input on the server, and apply authorisation there. A server action is a public endpoint with a friendly name.
+- Choose a rendering strategy deliberately: static for content that does not change, incremental regeneration for content that changes on a schedule, dynamic for genuinely per-request content.
+- Use `Suspense` and streaming for slow data, so the shell can render immediately.
+- Configure the metadata, the fonts, and the images through the framework's own mechanisms rather than with a script tag.
+- Set a cache policy per fetch and per route. Implicit caching is the source of most stale-content reports.
+- Keep the middleware thin. It runs on every matched request and is not the place for database work.

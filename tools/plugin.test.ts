@@ -205,11 +205,11 @@ function probeRoster(category: string): string {
     "",
     "Three probe agents.",
     "",
-    "| Agent | Category | Covers |",
-    "| --- | --- | --- |",
-    `| \`probe-alpha\` | ${category} | probing |`,
-    `| \`probe-beta\` | ${category} | probing |`,
-    `| \`probe-gamma\` | ${category} | probing |`,
+    "| Agent | Category |",
+    "| --- | --- |",
+    `| \`probe-alpha\` | ${category} |`,
+    `| \`probe-beta\` | ${category} |`,
+    `| \`probe-gamma\` | ${category} |`,
     "",
   ].join("\n")
 }

@@ -59,9 +59,9 @@ function fixture(): string {
     [
       "## Your roster",
       "",
-      "| Agent | Category | Covers |",
-      "| --- | --- | --- |",
-      "| `smoke-probe` | Smoke Group | probing |",
+      "| Agent | Category |",
+      "| --- | --- |",
+      "| `smoke-probe` | Smoke Group |",
       "",
     ].join("\n"),
   )

@@ -2,9 +2,10 @@
 // token-count.mjs — zero-dependency token budget for the prompt corpus.
 //
 // The prompt corpus is what every session pays for up front: the primary agent
-// definition plus the twelve subagent definitions. Skill bodies are excluded
-// from the corpus budget because they load on demand — they are listed
-// separately for visibility. Skill *listings* are not on demand, though: at
+// definition plus the twelve subagent definitions. Skill bodies and the
+// reference files beneath each skill directory are excluded from the corpus
+// budget because they load on demand — they are listed separately for
+// visibility. Skill *listings* are not on demand, though: at
 // every model step OpenCode advertises each permitted skill's id, name and
 // description wrapped in the markup of its listing template, so that
 // always-on surface is reported and can be budgeted with --max-skills. The
@@ -23,8 +24,9 @@
 //
 // Usage:
 //   node scripts/token-count.mjs                    report only (exit 0)
-//   node scripts/token-count.mjs --max 110000       enforce a corpus ceiling
-//   node scripts/token-count.mjs --max-skills 1000  enforce a skill-listing ceiling
+//   node scripts/token-count.mjs --max 35000        enforce a corpus ceiling
+//   node scripts/token-count.mjs --max-skills 1250  enforce a skill-listing ceiling
+//   node scripts/token-count.mjs --max-agent 3000   enforce a per-agent-file ceiling
 //   node scripts/token-count.mjs --help
 //
 // Run: npm run check:tokens   (exit 0 = within budget, exit 1 = over budget)
@@ -37,17 +39,19 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 const args = process.argv.slice(2)
 if (args.includes("--help") || args.includes("-h")) {
-  console.log(`Usage: node scripts/token-count.mjs [--max N] [--max-skills N]
+  console.log(`Usage: node scripts/token-count.mjs [--max N] [--max-skills N] [--max-agent N]
 
 Reports the estimated token count of the prompt corpus (wippaAGENT.md plus
-categories/*/*.md), per file and total, the on-demand skill bodies, and the
-always-on skill listings OpenCode advertises at every model step (each
-skill's id, name and description, counted as the listing template emits them,
-markup included). Either ceiling can be enforced.
+categories/*/*.md), per file and total, the on-demand skill bodies and
+reference files (loaded only when a skill is called or its reference files
+are read), and the always-on skill listings OpenCode advertises at every
+model step (each skill's id, name and description, counted as the listing
+template emits them, markup included). Any ceiling can be enforced.
 
 Options:
   --max N          fail with exit 1 when the corpus exceeds N estimated tokens
   --max-skills N   fail with exit 1 when the always-on skill listings exceed N
+  --max-agent N    fail with exit 1 when the largest subagent file exceeds N
   --help           print this help
 `)
   process.exit(0)
@@ -89,21 +93,27 @@ function skillDirectories() {
     .sort()
 }
 
-/** The skill files on disk. They live beside the corpus but load on demand. */
+/**
+ * Every Markdown file under the skill directories, recursively: each
+ * `SKILL.md` body plus its reference files. They live beside the corpus but
+ * load on demand. Sorted depth-first so the report is stable.
+ */
 function skillFiles() {
   const files = []
-  for (const dir of skillDirectories()) {
-    const path = join(ROOT, "skills", dir)
+  const walk = (rel) => {
     let entries
     try {
-      entries = readdirSync(path)
+      entries = readdirSync(join(ROOT, rel), { withFileTypes: true })
     } catch {
-      continue
+      return
     }
-    for (const file of entries.sort()) {
-      if (file.endsWith(".md")) files.push(`skills/${dir}/${file}`)
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const path = `${rel}/${entry.name}`
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile() && entry.name.endsWith(".md")) files.push(path)
     }
   }
+  for (const dir of skillDirectories()) walk(`skills/${dir}`)
   return files
 }
 
@@ -229,6 +239,7 @@ function read(rel) {
 
 let max = null
 let maxSkills = null
+let maxAgent = null
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--max") {
     const value = Number(args[++i])
@@ -244,6 +255,13 @@ for (let i = 0; i < args.length; i++) {
       process.exit(2)
     }
     maxSkills = Math.round(value)
+  } else if (args[i] === "--max-agent") {
+    const value = Number(args[++i])
+    if (!Number.isFinite(value) || value <= 0) {
+      console.error("error: --max-agent expects a positive number of tokens")
+      process.exit(2)
+    }
+    maxAgent = Math.round(value)
   } else {
     console.error(`error: unknown argument "${args[i]}" (try --help)`)
     process.exit(2)
@@ -264,6 +282,11 @@ const rows = files.map((rel) => {
 
 const totalChars = rows.reduce((sum, row) => sum + row.chars, 0)
 const totalTokens = rows.reduce((sum, row) => sum + row.tokens, 0)
+// The per-agent ceiling budgets a subagent definition, not the primary prompt:
+// every category file is one dispatchable agent, while wippaAGENT.md is the
+// orchestrator itself and is reported in the corpus total.
+const agentRows = rows.filter((row) => row.file.startsWith("categories/"))
+const largest = agentRows.reduce((largestRow, row) => (row.tokens > largestRow.tokens ? row : largestRow))
 
 console.log("prompt corpus token estimate (4 chars ≈ 1 token)")
 console.log("")
@@ -280,8 +303,15 @@ console.log(`${"-".repeat(nameWidth)}  ${"-".repeat(7)}  ${"-".repeat(11)}`)
 console.log(
   `${`TOTAL (${rows.length} files)`.padEnd(nameWidth)}  ${String(totalChars).padStart(7)}  ${String(totalTokens).padStart(11)}`,
 )
+console.log(
+  `largest subagent file: ${largest.tokens} (${largest.file})` +
+    (maxAgent !== null
+      ? ` — ${largest.tokens <= maxAgent ? "within" : "over"} the ${maxAgent} ceiling`
+      : ""),
+)
 
 const skills = skillFiles()
+let skillNameWidth = "SKILLS TOTAL".length
 if (skills.length > 0) {
   const skillRows = skills.map((rel) => {
     const text = read(rel)
@@ -289,15 +319,23 @@ if (skills.length > 0) {
   })
   const skillChars = skillRows.reduce((sum, row) => sum + row.chars, 0)
   const skillTokens = skillRows.reduce((sum, row) => sum + row.tokens, 0)
+  // The skill and listing tables share this width, which also covers the
+  // fixed prologue row; the corpus table keeps the width it already had.
+  skillNameWidth = Math.max(
+    ...skillRows.map((row) => row.file.length),
+    "SKILLS TOTAL".length,
+    "LISTINGS TOTAL".length,
+    "(prologue + wrapper, once per session)".length,
+  )
   console.log("")
-  console.log("on-demand skill bodies (loaded only when a skill is called, not budgeted):")
+  console.log("on-demand skill bodies and reference files (loaded only when a skill is called or its reference files are read, not budgeted):")
   for (const row of skillRows) {
     console.log(
-      `  ${row.file.padEnd(nameWidth)}  ${String(row.chars).padStart(7)}  ${String(row.tokens).padStart(11)}`,
+      `  ${row.file.padEnd(skillNameWidth)}  ${String(row.chars).padStart(7)}  ${String(row.tokens).padStart(11)}`,
     )
   }
   console.log(
-    `${"SKILLS TOTAL".padEnd(nameWidth)}  ${String(skillChars).padStart(7)}  ${String(skillTokens).padStart(11)}`,
+    `${"SKILLS TOTAL".padEnd(skillNameWidth)}  ${String(skillChars).padStart(7)}  ${String(skillTokens).padStart(11)}`,
   )
 }
 
@@ -313,16 +351,16 @@ if (listings.length > 0) {
   for (const row of listings) {
     const missing = row.hasDescription ? "" : " (no description: not advertised)"
     console.log(
-      `  ${row.file.padEnd(nameWidth)}  ${String(row.chars).padStart(7)}  ${String(row.tokens).padStart(11)}${missing}`,
+      `  ${row.file.padEnd(skillNameWidth)}  ${String(row.chars).padStart(7)}  ${String(row.tokens).padStart(11)}${missing}`,
     )
   }
   console.log(
-    `${"LISTINGS TOTAL".padEnd(nameWidth)}  ${String(listingChars).padStart(7)}  ${String(listingTokens).padStart(11)}`,
+    `${"LISTINGS TOTAL".padEnd(skillNameWidth)}  ${String(listingChars).padStart(7)}  ${String(listingTokens).padStart(11)}`,
   )
   // The wrapper around the per-skill blocks is a fixed cost, so it is shown
   // for visibility but not summed into the budgeted total above.
   console.log(
-    `  ${"(prologue + wrapper, once per session)".padEnd(nameWidth)}  ${String(SKILL_LISTING_FIXED.length).padStart(7)}  ${String(estimate(SKILL_LISTING_FIXED)).padStart(11)} (fixed, reported only)`,
+    `  ${"(prologue + wrapper, once per session)".padEnd(skillNameWidth)}  ${String(SKILL_LISTING_FIXED.length).padStart(7)}  ${String(estimate(SKILL_LISTING_FIXED)).padStart(11)} (fixed, reported only)`,
   )
 }
 
@@ -341,13 +379,20 @@ if (maxSkills !== null && listingTokens > maxSkills) {
   )
   process.exitCode = 1
 }
+if (maxAgent !== null && largest.tokens > maxAgent) {
+  console.error(
+    `agent budget exceeded: ${largest.file} is ${largest.tokens} estimated tokens > budget of ${maxAgent} (${largest.tokens - maxAgent} over, ${((largest.tokens / maxAgent - 1) * 100).toFixed(1)}%). ` +
+      "Shrink that definition — move role-specific playbooks into skills/ and leave a routing table.",
+  )
+  process.exitCode = 1
+}
 if (process.exitCode === 1) {
   process.exit(1)
 }
 
 console.log("")
-if (max === null && maxSkills === null) {
-  console.log("no budget given (report only) — pass --max N and --max-skills N to enforce a ceiling")
+if (max === null && maxSkills === null && maxAgent === null) {
+  console.log("no budget given (report only) — pass --max N, --max-skills N and --max-agent N to enforce a ceiling")
   process.exit(0)
 }
 if (max !== null) {
@@ -363,6 +408,13 @@ if (maxSkills !== null) {
   )
 } else {
   unchecked.push("--max-skills")
+}
+if (maxAgent !== null) {
+  console.log(
+    `agent budget OK: ${largest.tokens} <= ${maxAgent} (${maxAgent - largest.tokens} headroom, ${(((maxAgent - largest.tokens) / maxAgent) * 100).toFixed(1)}% of budget)`,
+  )
+} else {
+  unchecked.push("--max-agent")
 }
 if (unchecked.length > 0) {
   console.log(`(no ceiling on: ${unchecked.join(", ")})`)

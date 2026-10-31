@@ -6,7 +6,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { buildCatalog, readRoster } from "../tools/catalog.ts"
-import { parseScenario, validateScenario } from "./run.ts"
+import { missingReportTerms, parseScenario, validateScenario } from "./run.ts"
 
 const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url))
 const SCENARIOS_DIR = join(REPO_ROOT, "evals", "scenarios")
@@ -122,6 +122,56 @@ test("an unknown subagent is rejected against the catalog", () => {
   const problems = validateScenario(scenario, catalog())
 
   assert.ok(problems.some((problem) => problem.includes("ghost-agent") && problem.includes("not in the catalog")))
+})
+
+test("a report assertion is parsed as literal phrases", () => {
+  const scenario = parseScenario(
+    scenarioText({
+      "Report must mention":
+        "- references/payment-processing-and-checkout.md\n- network retry cannot double-charge",
+    }),
+    "99-probe.md",
+  )
+
+  assert.deepEqual(scenario.problems, [])
+  assert.deepEqual(scenario.report, [
+    "references/payment-processing-and-checkout.md",
+    "network retry cannot double-charge",
+  ])
+})
+
+test("an absent report assertion yields an empty list and no problem", () => {
+  const scenario = parseScenario(scenarioText(), "99-probe.md")
+
+  assert.deepEqual(scenario.report, [])
+  assert.deepEqual(scenario.problems, [])
+})
+
+test("an empty report assertion is a problem", () => {
+  const scenario = parseScenario(scenarioText({ "Report must mention": "" }), "99-probe.md")
+
+  assert.ok(
+    scenario.problems.some((problem) => problem.includes('empty section "## Report must mention"')),
+    scenario.problems.join("; "),
+  )
+  assert.deepEqual(scenario.report, [])
+})
+
+test("missingReportTerms names only the absent terms, case-insensitively", () => {
+  const scenario = parseScenario(
+    scenarioText({
+      "Report must mention":
+        "- REFERENCES/payment-processing-and-checkout.md\n- network retry cannot double-charge\n- idempotency key",
+    }),
+    "99-probe.md",
+  )
+  const lower =
+    "It read references/payment-processing-and-checkout.md and quoted the idempotency key rule."
+  const upper =
+    "IT READ REFERENCES/PAYMENT-PROCESSING-AND-CHECKOUT.MD AND QUOTED THE IDEMPOTENCY KEY RULE."
+
+  assert.deepEqual(missingReportTerms(scenario, lower), ["network retry cannot double-charge"])
+  assert.deepEqual(missingReportTerms(scenario, upper), ["network retry cannot double-charge"])
 })
 
 test("a primary agent definition that is not on disk is rejected", () => {

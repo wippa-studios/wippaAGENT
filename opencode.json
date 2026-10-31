@@ -16,15 +16,7 @@
       "disabled": true
     },
     "build": {
-      "mode": "subagent",
-      "description": "Writes and changes code. The implementation specialist \u2014 hands for substantial coding work when the parent agent delegates. Use directly only for a single well-scoped coding task.",
-      "permissions": [
-        {
-          "action": "subagent",
-          "resource": "*",
-          "effect": "deny"
-        }
-      ]
+      "disabled": true
     }
   },
   "compaction": {
