@@ -1,7 +1,7 @@
 {
   "name": "wippaagent",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "description": "wippaAGENT — one primary agent, twelve subagents, three MCP servers. The only OpenCode setup you need.",
   "license": "MIT",

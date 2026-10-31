@@ -7,6 +7,8 @@ below.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-01
+
 ### Changed
 
 - Every specialist definition now keeps a routing table and loads its
@@ -43,6 +45,8 @@ below.
   built-in; any other user-defined `build` entry is preserved unchanged.
 - The quick-routing table restores the capabilities the removed roster column
   carried, and states the fallback when no row matches.
+
+Shipped in #9, with documentation corrections in #10 and #12.
 
 ## [1.0.0] - Unreleased
 
