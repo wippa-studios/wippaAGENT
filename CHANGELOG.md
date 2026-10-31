@@ -11,7 +11,7 @@ below.
 
 - Every specialist definition now keeps a routing table and loads its
   playbooks on demand from `specialist-playbooks`, one file per topic. The
-  corpus fell from about 104,100 to 29,152 estimated tokens (one token taken
+  corpus fell from about 104,100 to 29,179 estimated tokens (one token taken
   as four characters).
 - `powershell-automation-playbooks` and `reinforcement-learning-playbooks` are
   now indexes plus reference files, like `domain-playbooks`.
@@ -22,7 +22,7 @@ below.
 - The wordmark is now a two-line monospace lockup, rendered into the README
   from the installer banner by `npm run wordmark`;
   `brand-assets/wippaAGENT-wordmark.svg` is removed and the installer banner
-  is 13 rows wide instead of 117 columns.
+  is 13 rows tall and 44 columns wide instead of 117 columns.
 
 ### Added
 
