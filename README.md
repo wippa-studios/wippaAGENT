@@ -225,12 +225,13 @@ Every flag is non-interactive, so the installer runs unattended in a script or a
 | `--dry-run` | Print every planned action and write nothing. |
 | `--force` | Overwrite files that already exist. |
 | `--uninstall` | Remove the agent files, the skills and the plugin when they still match the installed copy. Files you changed and the config file are left alone. |
-| `--apply-config` | Merge the required keys into the target `opencode.json` without disturbing values you already set. JSONC comments and trailing commas are accepted, and the config is validated before anything is copied. |
-| `--help` | Print the usage text. |
+| `--apply-config` | Add the required keys the target `opencode.json` is missing and leave the ones you already set alone, except an `agents.build` entry in the demoted shape this installer used to write, which is migrated to `disabled: true` with your other keys kept. JSONC comments and trailing commas are accepted, and the config is validated before anything is copied. |
+| `-h`, `--help` | Print the usage text. |
 
 ### Requirements
 
-- `bash` and the usual POSIX utilities (`cat`, `cp`, `ls`, `mkdir`, `printf`, `rm`, `rmdir`)
+- `bash` and the usual POSIX utilities (`cat`, `cmp`, `cp`, `id`, `ls`, `mkdir`, `printf`, `rm`, `rmdir`)
+- `tput` is optional: the installer uses it only to read the terminal width, and falls back to 80 columns when it is unavailable
 - Node, **only** when you pass `--apply-config`
 - The installer runs from any working directory, and refuses to run if the agent definitions are missing from the checkout it was started from
 
@@ -470,7 +471,7 @@ The agent set is inert until `default_agent` points at the orchestrator. Add it 
 }
 ```
 
-The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. The merge is non-destructive: keys you already set are left alone and reported as kept. The target may be JSON or JSONC — comments and trailing commas are accepted — and it is validated before the first file is copied, so a config that cannot be parsed leaves nothing half-installed. When a key has to be added the file is rewritten as plain JSON, so comments are not preserved in that case; when every key is already present the file is left byte-identical.
+The installer prints the full set of keys it expects before the summary, whether or not `--apply-config` is passed: `default_agent`, `agents.general`, `agents.explore`, `agents.build` and `mcp.servers`. Run it with `--apply-config` to merge those keys into the target config automatically. Every key you already set is left alone and reported as kept, with one exception: an `agents.build` entry that still carries the demotion this installer used to write — `mode: "subagent"` plus a deny entry for `subagent` on `*` — is migrated in place, so `mode` and `permissions` are removed, `disabled: true` is set, and every other key you added is kept. An entry of any other shape, including a hand-edited one that also demotes the built-in, is preserved untouched. The target may be JSON or JSONC — comments and trailing commas are accepted — and it is validated before the first file is copied, so a config that cannot be parsed leaves nothing half-installed. When a key has to be added the file is rewritten as plain JSON, so comments are not preserved in that case; when every key is already present the file is left byte-identical.
 
 <details>
 <summary><b>What each key does</b></summary>
@@ -500,6 +501,7 @@ The skills and the tools plugin need no configuration entry. They are installed 
 | `WIPPA_AGENT_REGISTRY` | See `env.example` |
 | `WIPPA_AGENT_DIR` | See `env.example` |
 | `WIPPA_CUSTOM_AGENT_IDS` | Comma-separated agent ids expected to live in the user's own global configuration. They are indexed alongside the roster and are exempt from roster drift reporting. Used by the tools plugin. |
+| `WIPPA_BANNER` | The installer only. `on` forces the wordmark, `off` suppresses it; unset, it prints only on a UTF-8 terminal wide enough for the art. It has no effect on OpenCode. |
 
 > [!WARNING]
 > `opencode debug config` lists every configuration source the session loads. On the CLI versions checked here (v2.2.0 and v2.2.2) MCP server headers are redacted as `***`, but the rest of the resolved configuration prints in full. Treat the output as sensitive, and do not paste it into an issue or a chat.
