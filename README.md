@@ -131,6 +131,19 @@ Most agent loops let one model plan the change, write it, grade it and declare v
 5. **Lean by contract.** The prompt corpus has a token budget enforced in CI, so the setup does not quietly bloat. See [Prompt budget](#prompt-budget).
 6. **Additive installs.** The installer never touches files it did not create, and never overwrites without `--force`.
 
+### Evidence of effectiveness (Eval outcomes)
+
+| Scenario | Domain & Tier | Expected Chain | Invariant / Defect Tested | Reviewer Finding | Acceptance Command | Verdict |
+|---|---|---|---|---|---|---|
+| **01 Plain Bug Fix** | Core Dev<br/>`Trivial` | `core-developer` | Regression safety | Skipped (Trivial tier) | `npm test` | **PASS** (exit 0) |
+| **02 Security Review** | Quality & Sec<br/>`Normal` | `security-reviewer` | Input sanitization | Clean review, no blocking sinks | `npm test` | **PASS** (exit 0) |
+| **03 Research Lookup** | Research<br/>`Normal` | `research-analyst` | Library documentation | Current Context7 documentation cited | None (Report check) | **PASS** (terms cited) |
+| **04 Domain Playbook Load** | Fintech<br/>`Normal` | `domain-specialist` | Webhook idempotency | Loaded payment playbook, enforced retry safety | None (Report check) | **PASS** (idempotency key enforced) |
+| **05 Polyglot Pytest Runner** | Python / API<br/>`Normal` | `language-specialist` → `quality-auditor` | Test suite execution via `wippa_verify` | Passed unit & boundary suite | `pytest tests/` | **PASS** (exit 0) |
+| **06 Polyglot Go Test Runner** | Go / Systems<br/>`Normal` | `language-specialist` → `quality-auditor` | Concurrency race detection | Passed `-race` check | `go test -v ./...` | **PASS** (exit 0) |
+| **07 High-Risk Auth Recon** | Auth / Secrets<br/>`High-risk` | `research-analyst` → `core-developer` → `security-reviewer` | Timing attack vulnerability | Caught plaintext token compare; required constant-time compare | None (Audit check) | **PASS** (constant-time verified) |
+| **08 Two-Iteration Escalation** | Architecture<br/>`High-risk` | `core-developer` ⇄ `quality-auditor` (2x) | Breaking schema change | Stopped at cap; escalated open risk with fix cost to user | None (Ledger escalation) | **PASS** (bounded escalation) |
+
 <br/>
 
 ## Architecture
@@ -201,6 +214,8 @@ flowchart TB
 `wippaAGENT` reads the request and the repository, plans the work, dispatches each piece to the subagent that owns it, reviews what comes back, checks the result against the acceptance criterion and reports the outcome. It holds one line:
 
 > Nothing is reported as done until the acceptance command has returned a zero exit code, and no Normal or High-risk work is reported done before a reviewer has seen the diff.
+
+**Narrowing broad specialists.** The twelve subagents are category-level shells. When dispatching a specialist, the orchestrator names its exact role framing (e.g. `FastAPI Specialist`, `Postgres Query Optimizer`) and the matching topic file from its playbooks table. The subagent loads that single reference file, giving it deep, opinionated domain expertise without paying for 100+ always-on agent definitions.
 
 Four behaviours separate this setup from a plain roster of agents.
 

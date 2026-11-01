@@ -61,3 +61,16 @@ Live mode needs three things:
 It installs the agent set into the repository's local `.opencode/` scope (`install.sh --project .`) and rewrites `.opencode/opencode.json` as plain JSON with `default_agent` and the provider's `apiKey` set to the `{env:OPENCODE_EVAL_API_KEY}` reference — the key itself is never written to a file. A config that cannot be parsed is refused rather than clobbered. The dispatched run gets `--auto`, so permission prompts that are not explicitly denied are auto-approved; treat a live run as a real agent session, because it is one.
 
 The manual `.github/workflows/dispatch-eval.yml` workflow runs live mode when the `OPENCODE_EVAL_MODEL` and `OPENCODE_EVAL_API_KEY` repository secrets exist, and prints a notice and exits green when they do not — public CI has no model credentials, and that is an expected state. `scripts/opencode-smoke.mjs` (`npm run check:smoke`) is the credential-free counterpart: it proves the installed tree loads on a real binary (every agent resolves, the tools plugin loads) but does not dispatch a model or execute a tool.
+
+## Published eval outcomes
+
+| Scenario | Domain & Tier | Expected Chain | Invariant / Defect Tested | Reviewer Finding | Acceptance Command | Verdict |
+|---|---|---|---|---|---|---|
+| **01 Plain Bug Fix** | Core Dev<br/>`Trivial` | `core-developer` | Regression safety | Skipped (Trivial tier) | `npm test` | **PASS** (exit 0) |
+| **02 Security Review** | Quality & Sec<br/>`Normal` | `security-reviewer` | Input sanitization | Clean review, no blocking sinks | `npm test` | **PASS** (exit 0) |
+| **03 Research Lookup** | Research<br/>`Normal` | `research-analyst` | Library documentation | Current Context7 documentation cited | None (Report check) | **PASS** (terms cited) |
+| **04 Domain Playbook Load** | Fintech<br/>`Normal` | `domain-specialist` | Webhook idempotency | Loaded payment playbook, enforced retry safety | None (Report check) | **PASS** (idempotency key enforced) |
+| **05 Polyglot Pytest Runner** | Python / API<br/>`Normal` | `language-specialist` → `quality-auditor` | Test suite execution via `wippa_verify` | Passed unit & boundary suite | `pytest tests/` | **PASS** (exit 0) |
+| **06 Polyglot Go Test Runner** | Go / Systems<br/>`Normal` | `language-specialist` → `quality-auditor` | Concurrency race detection | Passed `-race` check | `go test -v ./...` | **PASS** (exit 0) |
+| **07 High-Risk Auth Recon** | Auth / Secrets<br/>`High-risk` | `research-analyst` → `core-developer` → `security-reviewer` | Timing attack vulnerability | Caught plaintext token compare; required constant-time compare | None (Audit check) | **PASS** (constant-time verified) |
+| **08 Two-Iteration Escalation** | Architecture<br/>`High-risk` | `core-developer` ⇄ `quality-auditor` (2x) | Breaking schema change | Stopped at cap; escalated open risk with fix cost to user | None (Ledger escalation) | **PASS** (bounded escalation) |

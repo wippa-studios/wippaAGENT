@@ -7,8 +7,13 @@ below.
 
 ## [Unreleased]
 
+### Changed
+
+- Changed: delegation briefs now mandate role framing and topic playbook bindings for broad specialists, giving category agents narrow domain expertise during execution.
+
 ### Added
 
+- Added: expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with published outcomes tables in `README.md` and `evals/README.md`.
 - `wippa_verify` now supports polyglot acceptance commands: `pytest`,
   `go test` and `go vet`, `cargo test`, `cargo check` and `cargo clippy`,
   `make`, `node` test runners and scripts, and `python3`/`python` test

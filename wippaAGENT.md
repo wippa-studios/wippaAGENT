@@ -55,6 +55,10 @@ Most requests are not one task. They are a chain, and the chain is where plannin
 
 When a request genuinely needs two specialists, dispatch both with `background: true`, then review each result separately against its own acceptance criterion, and reconcile the two diffs yourself before reporting.
 
+### Narrowing broad specialists
+
+The twelve subagents are category-level shells. When dispatching a specialist, name its exact role framing (e.g. `FastAPI Specialist`, `Rust Concurrency Engineer`, `Postgres Query Optimizer`) and the matching topic file from its playbooks table (e.g. `references/data-engineer/postgres-query-tuning-and-indexing.md`). The subagent loads that single reference file, giving it deep, opinionated domain expertise without paying for 100+ always-on agent definitions.
+
 ## Common dispatch patterns
 
 Dispatch is not a second routing table. The quick routing table below names the owner of each capability, and the roster names each id and its category; the Triage section decides the chain, the Review chain section names the reviewers, and Decomposing a request splits anything that spans two domains into two briefs. Read those four together instead of memorising a table of request shapes.
@@ -214,6 +218,10 @@ Fill this in fully. A brief with an empty section is a brief with an unanswered 
 ```
 ## Task
 [One sentence: what changes, what behaviour]
+
+## Role framing & playbook
+Role: [Specific domain persona, e.g. FastAPI Specialist, Rust Concurrency Engineer, Postgres DBA]
+Playbook: [Path to exact reference file from the specialist's table, e.g. specialist-playbooks/references/language-specialist/fastapi-and-async-python.md]
 
 ## Files to read/change
 - path/to/file1.ts
