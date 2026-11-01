@@ -39,9 +39,11 @@
  *    naming it): `bash -n install.sh` and `shellcheck install.sh` pass as
  *    static checks, while `cat install.sh` reads the file as data.
  * 6. The allowlist — the command word of every segment must be in
- *    `ALLOWED_COMMANDS`, or be exactly `./install.sh`. Everything else
- *    (`node`, `npx`, `python3`, `gh`, `docker`, `find`, `sed`, a planted
- *    `./file`) is refused by default.
+ *    `ALLOWED_COMMANDS`, or be exactly `./install.sh`. Polyglot test runners
+ *    (`pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node`
+ *    and `python3`) are allowed under per-command rules. Everything else
+ *    (`npx`, `gh`, `docker`, `find`, `sed`, a planted `./file`) is refused
+ *    by default.
  *
  * This is an allowlist of the acceptance surface plus a character policy. It
  * is not a sandbox: an allowed command runs with the authority of the user
@@ -171,9 +173,9 @@ const DENIED_FIRST_WORDS: ReadonlySet<string> = new Set(["eval", "source", "exec
 
 /**
  * Every command word that may open an `&&` segment. Absence from this set is
- * the real gate: `node`, `npx`, `python3`, `ruby`, `sh`, `gh`, `docker`,
- * `kubectl`, `find`, `make`, `env`, `sed` and the rest are refused because
- * they are not named here, not because a rule anticipated them. `sed` is
+ * the real gate: `npx`, `ruby`, `sh`, `gh`, `docker`, `kubectl`, `find`,
+ * `env`, `sed` and the rest are refused because they are not named here,
+ * not because a rule anticipated them. `sed` is
  * deliberately absent: a sed script is a program of its own — `1e sh -c …`
  * executes a shell and `w /path` writes a file — and the acceptance chain
  * never invokes sed, so the whole dialect is refused rather than parsed.
@@ -218,6 +220,13 @@ const ALLOWED_COMMANDS: ReadonlySet<string> = new Set([
   "sleep",
   "seq",
   "exit",
+  "pytest",
+  "go",
+  "cargo",
+  "make",
+  "node",
+  "python3",
+  "python",
 ])
 
 // -------------------------------------------------- per-command flag policy
@@ -527,6 +536,29 @@ const PACKAGE_MANAGERS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
  * script body they execute lives in package.json and is not inspected here.
  */
 const NPM_SUBCOMMANDS: ReadonlySet<string> = new Set(["test", "run", "ls"])
+const GO_SUBCOMMANDS: ReadonlySet<string> = new Set(["test", "vet"])
+const CARGO_SUBCOMMANDS: ReadonlySet<string> = new Set(["test", "check", "clippy"])
+const MAKE_DENIED_OPTIONS: readonly string[] = [
+  "-C",
+  "--directory",
+  "-f",
+  "--file",
+  "--makefile",
+  "-E",
+  "--eval",
+]
+const NODE_DENIED_OPTIONS: readonly string[] = [
+  "-e",
+  "-p",
+  "--print",
+  "-i",
+  "--interactive",
+  "-r",
+  "--require",
+  "--import",
+  "--loader",
+  "--experimental-loader",
+]
 
 // -------------------------------------------------------------- tokenizing
 
@@ -693,6 +725,68 @@ function guardSegment(words: string[]): string | undefined {
       }
       if (!NPM_SUBCOMMANDS.has(subcommand)) {
         return `denied npm subcommand: \`${subcommand}\` (only test, run and ls pass)`
+      }
+    }
+
+    if (name === "go" && index === 0) {
+      const subcommand = words[1]
+      if (subcommand === undefined || !GO_SUBCOMMANDS.has(subcommand)) {
+        return `denied go subcommand: \`${subcommand}\` (only test and vet pass)`
+      }
+      for (const token of words.slice(1)) {
+        if (
+          flagMatches(token, "-exec") ||
+          flagMatches(token, "--exec") ||
+          flagMatches(token, "-toolexec") ||
+          flagMatches(token, "--toolexec") ||
+          flagMatches(token, "-vettool") ||
+          flagMatches(token, "--vettool")
+        ) {
+          return `denied go option: \`${token}\` (runs an external program)`
+        }
+      }
+    }
+
+    if (name === "cargo" && index === 0) {
+      const subcommand = words[1]
+      if (subcommand === undefined || !CARGO_SUBCOMMANDS.has(subcommand)) {
+        return `denied cargo subcommand: \`${subcommand}\` (only test, check and clippy pass)`
+      }
+    }
+
+    if (name === "pytest" && index === 0) {
+      for (const token of words.slice(1)) {
+        if (flagMatches(token, "--pdb") || flagMatches(token, "--trace")) {
+          return `denied pytest option: \`${token}\` (interactive debugger)`
+        }
+      }
+    }
+
+    if (name === "make" && index === 0) {
+      for (const token of words.slice(1)) {
+        for (const option of MAKE_DENIED_OPTIONS) {
+          if (flagMatches(token, option)) {
+            return `denied make option: \`${token}\` (directory escape or external file execution)`
+          }
+        }
+      }
+    }
+
+    if (name === "node" && index === 0) {
+      for (const token of words.slice(1)) {
+        for (const option of NODE_DENIED_OPTIONS) {
+          if (flagMatches(token, option)) {
+            return `denied node option: \`${token}\` (evaluates or preloads uninspected code)`
+          }
+        }
+      }
+    }
+
+    if ((name === "python3" || name === "python") && index === 0) {
+      for (const token of words.slice(1)) {
+        if (flagMatches(token, "-i")) {
+          return "denied python option: `-i` (interactive REPL)"
+        }
       }
     }
 

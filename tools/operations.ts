@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
-import { readFileSync, statSync } from "node:fs"
-import { resolve } from "node:path"
+import { lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { join, resolve } from "node:path"
 
 import {
   categorySlug,
@@ -571,4 +571,28 @@ function runCommand(
       if (signal.aborted) onAbort()
     }
   })
+}
+
+export function updatePlan(
+  location: string,
+  content: string,
+): { ok: boolean; path: string; bytes: number } | { error: string } {
+  try {
+    const dir = join(location, ".opencode")
+    mkdirSync(dir, { recursive: true })
+    const planPath = join(dir, "PLAN.md")
+    if (lstatSync(planPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return { error: "refusing to write to a symbolic link at .opencode/PLAN.md" }
+    }
+    writeFileSync(planPath, content, "utf8")
+    return {
+      ok: true,
+      path: ".opencode/PLAN.md",
+      bytes: Buffer.byteLength(content, "utf8"),
+    }
+  } catch (error) {
+    return {
+      error: `failed to write .opencode/PLAN.md: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
 }

@@ -33,7 +33,7 @@ the same routing and the same review discipline.
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
-![Tools](https://img.shields.io/badge/tools-6-f59e0b?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-7-f59e0b?style=for-the-badge)
 
 [![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
 [![Listed on awesome-software-factories](https://img.shields.io/badge/listed%20on-awesome--software--factories-blue)](https://github.com/varun1505/awesome-software-factories)
@@ -58,7 +58,7 @@ the same routing and the same review discipline.
     <td align="center" width="25%"><h2>1</h2><b>Primary agent</b><br/><sub>Plans, delegates, verifies</sub></td>
     <td align="center" width="25%"><h2>12</h2><b>Subagents</b><br/><sub>Implementation and review</sub></td>
     <td align="center" width="25%"><h2>3</h2><b>MCP servers</b><br/><sub>GitHub, docs, browser</sub></td>
-    <td align="center" width="25%"><h2>6</h2><b>Plugin tools</b><br/><sub>Roster lookup, verification and diff reading</sub></td>
+    <td align="center" width="25%"><h2>7</h2><b>Plugin tools</b><br/><sub>Roster lookup, verification and diff reading</sub></td>
   </tr>
 </table>
 
@@ -351,13 +351,19 @@ Every segment's command word must be on this list, or be exactly `./install.sh`,
 | Command | What is allowed |
 |---------|-----------------|
 | `npm` | Only `test`, `run` and `ls`. The subcommand must come immediately after `npm`, and any option in that position fails closed, so `npm pkg set`, `npm config set` and `npm --yes exec` are refused. |
+| `pytest` | Test execution (`pytest`, `pytest tests/`, `pytest -v -k unit`, `pytest --cov=src`). Interactive debugger `--pdb` is refused. |
+| `go` | Only `test` and `vet` subcommands (e.g. `go test ./...`, `go vet ./...`). `-exec` and `--exec` are refused. |
+| `cargo` | Only `test`, `check` and `clippy` subcommands (e.g. `cargo test`, `cargo check`, `cargo clippy`). |
+| `make` | Targets and flags without directory escapes or external file execution (e.g. `make`, `make test`, `make check`). `-C`, `--directory`, `-f`, `--file`, `--makefile` and `--eval` are refused. |
+| `node` | Test runner and scripts (e.g. `node --test`, `node tests/runner.js`). Eval flags (`-e`, `--eval`), interactive REPL (`-i`, `--interactive`), and preloads (`-r`, `--require`, `--import`, `--loader`) are refused. |
+| `python3` / `python` | Test runners and modules (e.g. `python3 -m unittest`, `python3 -m pytest`, `python3 tests/run.py`). Eval flag (`-c`) and interactive REPL (`-i`) are refused. |
 | `git` | Only `status`, `log`, `diff`, `show`, `blame`, `ls-remote`, `rev-parse`, `describe`, `grep`, `shortlog`, `fetch`, plus `branch` and `remote` in pure-listing form. |
 | Read-only utilities | `grep`, `rg`, `cat`, `head`, `tail`, `wc`, `ls`, `test`, `echo`, `true`, `false`, `basename`, `dirname`, `realpath`, `pwd`, `sort`, `uniq`, `tr`, `cut`, `stat`, `sha256sum`, `which`, `date`. `sort` and `uniq` only under their read-only flag allowlist; `rg` without `--pre` and `--pre-glob`. |
 | Inert utilities | `sleep`, `seq`, `exit` |
 | Static checks | `bash -n <file>` (`-n` must be the first argument, every later word a file name) and `shellcheck` |
 | Installer | `./install.sh`, only with `--dry-run` |
 
-Everything else is denied because it is not on the list, including `node`, `npx`, `python3`, `sh`, `sed`, `curl`, `gh`, `docker`, `awk`, `xargs`, `find`, `make` and `env`.
+Everything else is denied because it is not on the list, including `npx`, `sh`, `sed`, `curl`, `gh`, `docker`, `awk`, `xargs`, `find` and `env`.
 
 Nothing is inferred as read-only. `git worktree list`, `git submodule status`, `git stash list` and `git bisect log` are denied: the subcommand allowlist is explicit, so only the subcommands named above pass.
 
@@ -382,7 +388,7 @@ Each is refused with a reason.
 </details>
 
 > [!IMPORTANT]
-> **Documented residual.** `npm test` and `npm run <script>` execute whatever the project's `package.json` scripts contain; the guard inspects the npm invocation, not the script body. Beyond that, each allowlisted command is policed only where `tools/guards.ts` writes a rule (git's global and exec-channel options, the `sort` and `uniq` flag allowlists, `rg`'s denied `--pre` flags, `bash`'s positional rule), so an option no rule names is passed through to the command itself. An allowed command runs with the authority of the user running OpenCode, and `package.json` scripts are trusted input. Treat an acceptance command as you would any shell command.
+> **Documented residual.** `npm test` and `npm run <script>`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test`, and `python3 -m unittest` execute whatever the project scripts or tests contain; the guard inspects the command invocation, not the script body. Beyond that, each allowlisted command is policed only where `tools/guards.ts` writes a rule (git's global and exec-channel options, the `sort` and `uniq` flag allowlists, `rg`'s denied `--pre` flags, `bash`'s positional rule, and per-command rules for `go`, `cargo`, `pytest`, `make`, `node` and `python3`), so an option no rule names is passed through to the command itself. An allowed command runs with the authority of the user running OpenCode, and `package.json` scripts are trusted input. Treat an acceptance command as you would any shell command.
 
 ### How `wippa_diff` is guarded
 
@@ -411,9 +417,9 @@ No rule restricts MCP reach per agent: every agent can reach the `github`, `cont
 
 ## Tools and MCP servers
 
-### The six plugin tools
+### The seven plugin tools
 
-The bundled plugin adds six tools: four for finding and reading the roster, one for checking work, and one for reading a diff.
+The bundled plugin adds seven tools: four for finding and reading the roster, one for checking work, one for reading a diff, and one for updating the session plan ledger.
 
 | Tool | Question it answers |
 |------|---------------------|
@@ -421,8 +427,9 @@ The bundled plugin adds six tools: four for finding and reading the roster, one 
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
-| `wippa_verify` | Did the acceptance command pass? Runs it asynchronously with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. Commands outside the [guard](#how-wippa_verify-is-guarded) never run. |
+| `wippa_verify` | Did the acceptance command pass? Runs it asynchronously with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. Runs `npm test/run`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test`, and `python3 -m unittest`. Commands outside the [guard](#how-wippa_verify-is-guarded) never run. |
 | `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries (patch, additions, deletions, status), so the orchestrator can read the diff itself without a shell. |
+| `wippa_plan_update` | How to record decisions and progress without child agent hops? Writes or updates the session plan ledger at `.opencode/PLAN.md` exclusively within the workspace. |
 
 **What the catalog contains.** The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override and the bundle's own tree are indexed in full.
 

@@ -162,8 +162,60 @@ test("allows only npm test, run and ls — every other package manager and npm s
   assertDenied("npm --silent run build", "npm option before the subcommand")
   assertDenied("pnpm --filter web run build", "acceptance allowlist")
   assertDenied("yarn test", "acceptance allowlist")
-  assertDenied("cargo test", "acceptance allowlist")
-  assertDenied("go test ./...", "acceptance allowlist")
+})
+
+test("allows polyglot test runners: pytest, go test/vet, cargo test/check/clippy, make, node and python3", () => {
+  assertAllowed("pytest")
+  assertAllowed("pytest tests/")
+  assertAllowed("pytest -v -k unit")
+  assertAllowed("pytest --cov=src")
+  assertAllowed("go test ./...")
+  assertAllowed("go test -v -race ./...")
+  assertAllowed("go vet ./...")
+  assertAllowed("cargo test")
+  assertAllowed("cargo test --all")
+  assertAllowed("cargo check")
+  assertAllowed("cargo clippy")
+  assertAllowed("make")
+  assertAllowed("make test")
+  assertAllowed("make check")
+  assertAllowed("node --test")
+  assertAllowed("node tests/runner.js")
+  assertAllowed("python3 -m unittest")
+  assertAllowed("python3 -m pytest")
+  assertAllowed("python3 tests/run.py")
+  assertAllowed("python -m unittest")
+})
+
+test("denies unsafe subcommands and flags on polyglot runners", () => {
+  assertDenied("go run main.go", "go run")
+  assertDenied("go install example.com/x", "go install")
+  assertDenied("go build", "only test and vet pass")
+  assertDenied("go test -exec ./evil", "runs an external program")
+  assertDenied("go test -toolexec ./evil ./...", "runs an external program")
+  assertDenied("go vet --toolexec=./evil ./...", "runs an external program")
+  assertDenied("go vet -vettool=./evil ./...", "go option")
+  assertDenied("go vet --vettool=./evil ./...", "go option")
+  assertDenied("cargo run", "only test, check and clippy pass")
+  assertDenied("cargo install foo", "cargo install")
+  assertDenied("cargo publish", "cargo publish")
+  assertDenied("cargo build", "only test, check and clippy pass")
+  assertDenied("pytest --pdb", "--pdb")
+  assertDenied("pytest --trace", "interactive debugger")
+  assertDenied("make -C /tmp", "directory escape or external file execution")
+  assertDenied("make --directory=/tmp", "directory escape or external file execution")
+  assertDenied("make -f /tmp/evil.mk", "directory escape or external file execution")
+  assertDenied("make -E evil test", "directory escape or external file execution")
+  assertDenied("make --eval \"evil\"", "directory escape or external file execution")
+  assertDenied("node -e 'console.log(1)'", "denied")
+  assertDenied("node -e process.exit", "node with an eval flag")
+  assertDenied("node -p 'process.env'", "evaluates or preloads uninspected code")
+  assertDenied("node --print '1+1'", "evaluates or preloads uninspected code")
+  assertDenied("node --experimental-loader=evil tests/run.js", "evaluates or preloads uninspected code")
+  assertDenied("node -r evil tests/run.js", "evaluates or preloads uninspected code")
+  assertDenied("node -i", "evaluates or preloads uninspected code")
+  assertDenied("python3 -c 'import os'", "python with -c")
+  assertDenied("python3 -i tests/run.py", "interactive REPL")
 })
 
 test("denies file mutators flat", () => {
@@ -335,7 +387,7 @@ test("the regression battery: every string the reviews live-proved ALLOW is now 
     ["npm config set registry http://evil.example", "npm subcommand"],
     ["npm --yes exec cowsay hi", "npm option before the subcommand"],
     ["npx --yes cowsay hi", "acceptance allowlist"],
-    ["python3 -m http.server 8080", "acceptance allowlist"],
+    ["ruby server.rb", "acceptance allowlist"],
     ["./planted-executable", "may be run by path"],
     ["npm test &&& sleep 1", "backgrounding"],
     ["node --eval=process.exit", "node with an eval flag"],
