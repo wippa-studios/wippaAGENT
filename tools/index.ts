@@ -17,6 +17,7 @@ import {
   invalid,
   list,
   search,
+  updatePlan,
   verify,
   type VerifyOptions,
   type VerifyResult,
@@ -424,6 +425,34 @@ const plugin: Plugin.Plugin = {
               }),
             }
           }
+        },
+      })
+
+      editor.add({
+        name: "plan_update",
+        description:
+          "Write or update the session plan ledger at .opencode/PLAN.md. Only writes to that exact file within the workspace; rejects any attempt to write elsewhere.",
+        input: {
+          type: "object",
+          properties: {
+            content: {
+              type: "string",
+              description: "The full markdown content to write to .opencode/PLAN.md.",
+            },
+          },
+          required: ["content"],
+          additionalProperties: false,
+        },
+        options: { namespace: "wippa", codemode: false },
+        execute: async (input, context) => {
+          await context.progress({ status: "plan_update" })
+          const { content } = input as { content?: unknown }
+          if (typeof content !== "string") {
+            return { content: JSON.stringify({ error: "content must be a string" }) }
+          }
+          const location = resolve(ctx.location.directory)
+          const result = updatePlan(location, content)
+          return { content: JSON.stringify(result) }
         },
       })
     })

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 
 import plugin from "./index.ts"
+import { updatePlan } from "./operations.ts"
 
 // ---------------------------------------------------------------- fake host
 
@@ -230,7 +231,7 @@ function probeFixture(rosterBeside = false): { root: string; agents: string; ros
 
 // ---------------------------------------------------------------- tests
 
-test("setup registers the six wippa tools in the wippa namespace", async () => {
+test("setup registers the seven wippa tools in the wippa namespace", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -238,7 +239,7 @@ test("setup registers the six wippa tools in the wippa namespace", async () => {
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     host.tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff"],
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff", "plan_update"],
   )
   for (const tool of host.tools) {
     const expected =
@@ -679,6 +680,78 @@ test("diff reports a VCS failure as structured output instead of throwing", asyn
 
   assert.deepEqual(JSON.parse(content), { error: "not a git repository" })
   assert.equal(host.diffCalls[0]?.base, undefined, "a non-string base is absent")
+})
+
+test("plan_update writes .opencode/PLAN.md and returns bytes", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const content = "# Test Plan\n\n- [ ] Task 1\n"
+  const resultJson = await runTool(host, "plan_update", { content })
+  const result = JSON.parse(resultJson)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.path, ".opencode/PLAN.md")
+  assert.equal(result.bytes, Buffer.byteLength(content, "utf8"))
+
+  const written = readFileSync(join(root, ".opencode", "PLAN.md"), "utf8")
+  assert.equal(written, content)
+
+  const badResultJson = await runTool(host, "plan_update", { content: 123 })
+  const badResult = JSON.parse(badResultJson)
+  assert.equal(badResult.error, "content must be a string")
+})
+
+test("updatePlan refuses to write through a symbolic link", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const opencodeDir = join(root, ".opencode")
+  mkdirSync(opencodeDir, { recursive: true })
+  const target = join(root, "target.txt")
+  writeFileSync(target, "original content", "utf8")
+  const symlinkPath = join(opencodeDir, "PLAN.md")
+  symlinkSync(target, symlinkPath)
+
+  const resultJson = await runTool(host, "plan_update", { content: "# Malicious plan\n" })
+  const result = JSON.parse(resultJson)
+  assert.deepEqual(result, {
+    error: "refusing to write to a symbolic link at .opencode/PLAN.md",
+  })
+  assert.equal(readFileSync(target, "utf8"), "original content")
+
+  const directResult = updatePlan(root, "# Direct overwrite\n")
+  assert.deepEqual(directResult, {
+    error: "refusing to write to a symbolic link at .opencode/PLAN.md",
+  })
+  assert.equal(readFileSync(target, "utf8"), "original content")
+})
+
+test("updatePlan refuses to write through a dangling symbolic link", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const opencodeDir = join(root, ".opencode")
+  mkdirSync(opencodeDir, { recursive: true })
+  const target = join(root, "nonexistent-target.txt")
+  const symlinkPath = join(opencodeDir, "PLAN.md")
+  symlinkSync(target, symlinkPath)
+
+  const resultJson = await runTool(host, "plan_update", { content: "# Malicious plan\n" })
+  const result = JSON.parse(resultJson)
+  assert.deepEqual(result, {
+    error: "refusing to write to a symbolic link at .opencode/PLAN.md",
+  })
+  assert.equal(existsSync(target), false)
+
+  const directResult = updatePlan(root, "# Direct overwrite\n")
+  assert.deepEqual(directResult, {
+    error: "refusing to write to a symbolic link at .opencode/PLAN.md",
+  })
+  assert.equal(existsSync(target), false)
 })
 
 test("editing the roster invalidates the cached catalog", async () => {

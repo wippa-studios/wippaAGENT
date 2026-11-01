@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -190,7 +190,7 @@ test("the plugin object is a real Plugin.Plugin and registers its tools through 
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff"],
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff", "plan_update"],
   )
   assert.equal(namespace()?.name, "wippa")
   assert.ok((namespace()?.description ?? "").length > 0)
@@ -237,4 +237,19 @@ test("the diff tool unwraps the real VcsDiffOutput envelope", async () => {
   assert.equal(diffCalls.length, 1)
   assert.equal(diffCalls[0]?.mode, "working")
   assert.equal(diffCalls[0]?.context, 3)
+})
+
+test("plan_update writes .opencode/PLAN.md in smoke environment", async () => {
+  const root = fixture()
+  const { host, tools } = smokeHost(root)
+  await plugin.setup(host as Plugin.Context)
+  const context = toolContext()
+
+  const content = "# Smoke Plan\n"
+  const resultJson = await runTool(tools, "plan_update", { content }, context)
+  const result = JSON.parse(resultJson.content)
+  assert.equal(result.ok, true)
+  assert.equal(result.path, ".opencode/PLAN.md")
+  assert.equal(result.bytes, Buffer.byteLength(content, "utf8"))
+  assert.equal(readFileSync(join(root, ".opencode", "PLAN.md"), "utf8"), content)
 })

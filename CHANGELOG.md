@@ -7,6 +7,19 @@ below.
 
 ## [Unreleased]
 
+### Added
+
+- `wippa_verify` now supports polyglot acceptance commands: `pytest`,
+  `go test` and `go vet`, `cargo test`, `cargo check` and `cargo clippy`,
+  `make`, `node` test runners and scripts, and `python3`/`python` test
+  modules and scripts, guarded by per-command restrictions against
+  external program execution, directory escape, interactive debuggers and
+  eval flags.
+- `wippa_plan_update` tool in the plugin: writes directly and exclusively to
+  `.opencode/PLAN.md` within the workspace, refusing symlinks and eliminating
+  child agent hops for session plan updates while preserving edit denial on
+  repository source code.
+
 ## [1.1.0] - 2026-11-01
 
 ### Changed
