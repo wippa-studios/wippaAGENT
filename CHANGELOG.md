@@ -9,21 +9,44 @@ below.
 
 ### Changed
 
-- Changed: delegation briefs now mandate role framing and topic playbook bindings for broad specialists, giving category agents narrow domain expertise during execution.
+- Delegation briefs now mandate role framing and topic playbook bindings for broad specialists, giving category agents narrow domain expertise during execution.
+- The six runner commands in `wippa_verify` are now fail-closed flag allowlists: a flag not named in a runner's allowlist is refused, with the flag named in the reason.
+- `wippa_verify` now reads the working diff before it spawns anything and refuses to run when the test file, `conftest.py`, `Makefile`, `package.json` or runner configuration is modified, unless the caller passes `acknowledgeHarnessChanges: true`; it reports `harnessCheck: "skipped"` when the diff cannot be read.
+- The README now describes the single plan-ledger write and the harness gate throughout, and the coverage tables in `README.md` and `evals/README.md` record the evidence that exists rather than claiming a measured effect.
 
 ### Added
 
-- Added: expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with published outcomes tables in `README.md` and `evals/README.md`.
+- `wippa_subagent_continue` in the plugin: it takes only an agent id and a prompt, resumes the newest child session of that subagent under the current session, accepts no session id input, asserts the `subagent_continue` permission before listing anything, and returns the session id as output only.
+- `scripts/opencode.sh` behind `npm run opencode`: runtime detection for `auto`, `node` and `bun`, a V8 heap cap for node through `NODE_OPTIONS`, and an opt-in `ulimit -v` address-space limit for bun.
+- `scripts/opencode-memory.sh` behind `npm run clean:opencode`: a read-only report by default, `--apply` for snapshot cleanup and log rotation, and `--vacuum --yes` for a consistent `.backup` with a random suffix at mode 600 before `wal_checkpoint(TRUNCATE)` and `VACUUM`.
+- Expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with coverage tables in `README.md` and `evals/README.md`.
 - `wippa_verify` now supports polyglot acceptance commands: `pytest`,
   `go test` and `go vet`, `cargo test`, `cargo check` and `cargo clippy`,
   `make`, `node` test runners and scripts, and `python3`/`python` test
   modules and scripts, guarded by per-command restrictions against
   external program execution, directory escape, interactive debuggers and
   eval flags.
-- `wippa_plan_update` tool in the plugin: writes directly and exclusively to
-  `.opencode/PLAN.md` within the workspace, refusing symlinks and eliminating
-  child agent hops for session plan updates while preserving edit denial on
-  repository source code.
+- `wippa_plan_update` tool in the plugin: it writes exactly
+  `.opencode/PLAN.md`, takes no path argument, refuses a symlink at that path
+  (dangling or not), and asserts its own `plan_update` permission, eliminating
+  child agent hops for session plan updates while edit stays denied on every
+  file except the ledger.
+- `wippa_plan_update` is behind a `plan_update` permission asserted before the
+  write; `wippaAGENT` is the only agent that declares it.
+- `README.md` documents the specialist playbooks: 175 reference files across 11
+  folders, their on-demand token treatment, and the procedure for adding one.
+
+### Fixed
+
+- `cargo --target` now refuses a value ending in `.json`, so a bare `target.json` custom target spec cannot be passed where the guard expects a triple or built-in target name.
+- `wippa_plan_update` refuses a hard link at `.opencode/PLAN.md` in addition to a symlink, so a ledger path that aliases a file outside the workspace is not written through.
+- The `wippa_verify` harness surface includes `.npmrc` and follows the body of an npm script into the files it names.
+- `wippa_verify` resolves a relative `cwd` against the workspace rather than the server process directory, and refuses one that canonicalises outside it.
+- Delegation serialises same-agent dispatches, and a revision resumes the child through `wippa_subagent_continue` with the same agent id rather than opening a fresh session.
+- Closed the first-round guard escapes: unquoted backslashes and glob expansion, dash-leading option values, make command-line variable assignments, positional pytest `@argfile`, a symlinked `.opencode` directory, out-of-workspace `cwd`, and exact npm script-shell options. The third and fourth rounds closed the residual spellings: git and npm long options are matched by unambiguous prefix, make assignments are refused with leading whitespace and the `!=` operator, pytest argument files are refused in option values as well as positionally, and a quoted closing brace is refused.
+- `python3 -m` in `wippa_verify` accepts only `unittest` and `pytest`,
+  including the attached `-munittest` form, and `cargo --config`, `-Z` and
+  `--manifest-path` are refused.
 
 ## [1.1.0] - 2026-11-01
 

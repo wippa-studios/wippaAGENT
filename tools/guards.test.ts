@@ -40,6 +40,50 @@ test("denies substitution, expansion, redirection, pipe, separator and line-brea
   assertDenied("npm test || true", "pipe")
 })
 
+test("denies an unquoted backslash, which the shell removes before the command sees the word", () => {
+  for (const command of [
+    "pytest \\-p evil",
+    "cargo \\-\\-config=build.rustc-wrapper=/bin/echo",
+    "make \\-f /tmp/evil.mk",
+    "node \\-r ./evil.js",
+    "git fetch \\-\\-upload-pack=id origin",
+    "rg \\-\\-pre=/tmp/pw.sh pattern f",
+    "go test \\-exec ./evil ./...",
+    "sort \\-o out.txt in.txt",
+  ]) {
+    assertDenied(command, "unquoted backslash")
+  }
+  // Inside quotes the shell keeps the backslash as data, so the guards for
+  // `-k` and a plain echo argument still pass.
+  assertAllowed("pytest -k 'a\\-b'")
+  assertAllowed("echo 'a\\b'")
+  assertAllowed('pytest -k "a\\-b"')
+})
+
+test("denies unquoted glob and brace metacharacters while quoted patterns pass", () => {
+  assertDenied("pytest *", "unquoted glob")
+  assertDenied("node --test tests/*.js", "unquoted glob")
+  assertDenied("pytest tests/?_x.py", "unquoted glob")
+  assertDenied("echo [ab]", "unquoted glob")
+  assertDenied("echo {a,b}", "unquoted brace")
+  assertAllowed('pytest -k "test_*"')
+  assertAllowed("pytest -k 'test_[ab]'")
+  assertAllowed('rg -n --glob "*.ts" pattern tools/')
+})
+
+test("a quoted closing brace does not end a brace expansion early", () => {
+  // The close must be found with quote tracking: `{x"}"y,-p}` has a quoted
+  // `}` and a comma after it, and `indexOf("}")` stopped at the quoted one.
+  assertDenied('pytest {x"}"y,-p}', "brace expansion")
+  assertDenied("pytest {x'}'y,-p}", "brace expansion")
+  assertDenied('pytest {"}"x,-p}', "brace expansion")
+  assertDenied("pytest {a,b}", "brace expansion")
+  assertDenied("pytest {1..3}", "brace expansion")
+  assertAllowed("pytest '{}'")
+  assertAllowed("pytest -k '{a,b}'")
+  assertAllowed("pytest {a}")
+})
+
 // ------------------------------------------------------- verdict integrity
 
 test("allows only && chains: no separators, no fallbacks, no backgrounding", () => {
@@ -136,7 +180,7 @@ test("denies package install, publish and exec subcommands", () => {
   assertDenied("bun install", "denied pair: `bun install`")
   assertDenied("pip install evil", "denied pair: `pip install`")
   assertDenied("pip3 install evil", "denied pair: `pip3 install`")
-  assertDenied("python -m pip install evil", "denied pair: `pip install`")
+  assertDenied("python -m pip install evil", "module: `pip`")
   assertDenied("gem install evil", "denied pair: `gem install`")
   assertDenied("go run main.go", "denied pair: `go run`")
   assertDenied("go install example.com/x", "denied pair: `go install`")
@@ -191,31 +235,250 @@ test("denies unsafe subcommands and flags on polyglot runners", () => {
   assertDenied("go run main.go", "go run")
   assertDenied("go install example.com/x", "go install")
   assertDenied("go build", "only test and vet pass")
-  assertDenied("go test -exec ./evil", "runs an external program")
-  assertDenied("go test -toolexec ./evil ./...", "runs an external program")
-  assertDenied("go vet --toolexec=./evil ./...", "runs an external program")
-  assertDenied("go vet -vettool=./evil ./...", "go option")
-  assertDenied("go vet --vettool=./evil ./...", "go option")
+  assertDenied("go test -exec ./evil", "not in go's flag allowlist")
+  assertDenied("go test -toolexec ./evil ./...", "not in go's flag allowlist")
+  assertDenied("go vet --toolexec=./evil ./...", "not in go's flag allowlist")
+  assertDenied("go vet -vettool=./evil ./...", "not in go's flag allowlist")
+  assertDenied("go vet --vettool=./evil ./...", "not in go's flag allowlist")
+  assertDenied("go test -args -test.v ./...", "not in go's flag allowlist")
   assertDenied("cargo run", "only test, check and clippy pass")
   assertDenied("cargo install foo", "cargo install")
   assertDenied("cargo publish", "cargo publish")
   assertDenied("cargo build", "only test, check and clippy pass")
+  assertDenied("cargo test --config build.rustc-wrapper=/bin/echo", "--config")
+  assertDenied("cargo test -Z unstable-options", "not in cargo's flag allowlist")
+  assertDenied("cargo test --manifest-path /tmp/evil/Cargo.toml", "--manifest-path")
   assertDenied("pytest --pdb", "--pdb")
-  assertDenied("pytest --trace", "interactive debugger")
-  assertDenied("make -C /tmp", "directory escape or external file execution")
-  assertDenied("make --directory=/tmp", "directory escape or external file execution")
-  assertDenied("make -f /tmp/evil.mk", "directory escape or external file execution")
-  assertDenied("make -E evil test", "directory escape or external file execution")
-  assertDenied("make --eval \"evil\"", "directory escape or external file execution")
+  assertDenied("pytest --trace", "--trace")
+  assertDenied("pytest -p evil", "not in pytest's flag allowlist")
+  assertDenied("pytest -c evil.ini", "not in pytest's flag allowlist")
+  assertDenied("pytest --config-file evil.ini", "--config-file")
+  assertDenied("pytest -o addopts=evil", "not in pytest's flag allowlist")
+  assertDenied("pytest --override-ini addopts=evil", "--override-ini")
+  assertDenied("make -C /tmp", "not in make's flag allowlist")
+  assertDenied("make --directory=/tmp", "not in make's flag allowlist")
+  assertDenied("make -f /tmp/evil.mk", "not in make's flag allowlist")
+  assertDenied("make -I /tmp", "not in make's flag allowlist")
+  assertDenied("make -E evil test", "not in make's flag allowlist")
+  assertDenied("make --eval \"evil\"", "not in make's flag allowlist")
   assertDenied("node -e 'console.log(1)'", "denied")
   assertDenied("node -e process.exit", "node with an eval flag")
-  assertDenied("node -p 'process.env'", "evaluates or preloads uninspected code")
-  assertDenied("node --print '1+1'", "evaluates or preloads uninspected code")
-  assertDenied("node --experimental-loader=evil tests/run.js", "evaluates or preloads uninspected code")
-  assertDenied("node -r evil tests/run.js", "evaluates or preloads uninspected code")
-  assertDenied("node -i", "evaluates or preloads uninspected code")
+  assertDenied("node -p 'process.env'", "not in node's flag allowlist")
+  assertDenied("node --print '1+1'", "not in node's flag allowlist")
+  assertDenied("node --experimental-loader=evil tests/run.js", "not in node's flag allowlist")
+  assertDenied("node -r evil tests/run.js", "not in node's flag allowlist")
+  assertDenied("node -i", "not in node's flag allowlist")
+  assertDenied("node --watch tests/run.js", "not in node's flag allowlist")
+  assertDenied("node --test-reporter=evil tests/run.js", "allowed values: spec, tap, dot, junit")
   assertDenied("python3 -c 'import os'", "python with -c")
-  assertDenied("python3 -i tests/run.py", "interactive REPL")
+  assertDenied("python3 -i tests/run.py", "not in python3's flag allowlist")
+})
+
+test("a value-taking runner option does not consume a dash-leading token as its value", () => {
+  // These passed before the value rule: `--target` swallowed the next option,
+  // so `--config`, `--manifest-path` and `-Z` were never checked against the
+  // table. A dash-leading word is another option, not a value.
+  for (const command of [
+    "cargo check --target --config=build.rustc-wrapper=/bin/echo",
+    "cargo check --target --manifest-path=/tmp/evil/Cargo.toml",
+    "cargo check --target -Z",
+  ]) {
+    assertDenied(command, "requires a value")
+  }
+  assertAllowed("cargo test -j 4")
+  assertAllowed("pytest -k unit")
+})
+
+test("cargo --target accepts a triple or built-in name, not a custom target path", () => {
+  // A target JSON has a linker field naming a program cargo would run, so the
+  // value is restricted to the characters a triple uses. A bare file name is
+  // still a file: `target.json` names a custom spec, so it is refused too.
+  for (const target of [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "wasm32-unknown-unknown",
+    "thumbv7em-none-eabihf",
+  ]) {
+    assertAllowed(`cargo test --target ${target}`)
+    assertAllowed(`cargo test --target=${target}`)
+  }
+  assertDenied("cargo test --target target.json", "value does not match")
+  assertDenied("cargo test --target=target.json", "value does not match")
+  assertDenied("cargo test --target target.JSON", "value does not match")
+  assertDenied("cargo test --target /tmp/target.json", "value does not match")
+  assertDenied("cargo test --target=/tmp/target.json", "value does not match")
+  assertDenied("cargo test --target=../target.json", "value does not match")
+})
+
+test("make refuses command-line variable assignments at every position", () => {
+  // `MAKEFILES=…` loads another makefile and `SHELL=…` picks the recipe
+  // shell; both are positional words, so the rule cannot stop at the first.
+  assertDenied("make MAKEFILES=/tmp/evil.mk test", "variable assignment")
+  assertDenied("make SHELL=/tmp/evil test", "variable assignment")
+  assertDenied("make test VAR=1", "variable assignment")
+  // GNU make leaves a non-numeric word after `-j` alone, so this is an
+  // assignment rather than `-j`'s argument.
+  assertDenied("make -j MAKEFILES=/tmp/evil.mk test", "variable assignment")
+  // The other assignment operators and a dotted variable name are the same
+  // escape: `make MAKEFILES:=…` loads the named makefile.
+  assertDenied("make MAKEFILES:=/tmp/evil.mk test", "variable assignment")
+  assertDenied("make MAKEFILES+=/tmp/evil.mk test", "variable assignment")
+  assertDenied("make MAKEFILES.a=/tmp/evil.mk test", "variable assignment")
+  // A quoted whitespace-before-operator assignment is one argv word after the
+  // shell strips the quotes, and make trims the name before loading the file.
+  assertDenied("make 'MAKEFILES =evil.conf'", "variable assignment")
+  assertDenied("make 'SHELL =/tmp/evil'", "variable assignment")
+  assertDenied("make 'MAKEFLAGS =--eval=evil'", "variable assignment")
+  assertDenied("make 'FOO := bar'", "variable assignment")
+  assertDenied("make 'FOO += bar'", "variable assignment")
+  assertDenied("make 'FOO ?= bar'", "variable assignment")
+  // GNU make trims leading blanks and whitespace before the operator, and
+  // accepts `:::=` and the shell `!=` form. Each of these is one argv word
+  // after the shell strips the quotes.
+  assertDenied("make -n ' MAKEFILES=evil.conf' all", "variable assignment")
+  assertDenied("make '\tMAKEFILES=evil.conf' pwned", "variable assignment")
+  assertDenied("make 'MAKEFILES:::=evil.conf' pwned", "variable assignment")
+  assertDenied("make 'MAKEFILES !=echo evil.conf' pwned", "variable assignment")
+  assertDenied("make 'X !=touch /tmp/exmarker' probe", "variable assignment")
+  assertDenied("make 'FOO::=bar' test", "variable assignment")
+  assertDenied("make 'FOO!=bar' test", "variable assignment")
+  assertAllowed("make test")
+  assertAllowed("make -j4 test")
+  assertAllowed("make -j 4 test")
+  assertAllowed("make check all")
+  assertAllowed("make -n test")
+})
+
+test("pytest refuses @argument files, directly and through python -m pytest", () => {
+  assertDenied("python3 -m pytest @c3.txt -q", "argument file")
+  assertDenied("pytest @c3.txt -q", "argument file")
+  assertDenied("pytest @file", "argument file")
+  assertAllowed("pytest tests/")
+  assertAllowed("python3 -m pytest -q")
+})
+
+test("pytest refuses an argument file in an option-value slot", () => {
+  // pytest expands the argfile in a value too, so `-k @c.args` loads options
+  // (`-c`, `-o`, a plugin) the flag table refuses to see.
+  for (const command of [
+    "pytest -k @c3.args",
+    "pytest -m @c3.args",
+    "pytest -k@c3.args",
+    "pytest -k=@c3.args",
+    "pytest --deselect=@file",
+    "pytest --ignore=@file",
+    "python3 -m pytest -k @file",
+    "python3 -m pytest --deselect=@file",
+  ]) {
+    assertDenied(command, "argument file")
+  }
+  assertAllowed("pytest -k unit")
+  assertAllowed("pytest tests/")
+  assertAllowed("python3 -m pytest -k unit")
+  assertAllowed("python3 -m pytest -q")
+})
+
+test("pytest treats an @ that is not an argument-file spelling as data", () => {
+  // Only `@file`, `=@file` and `-k@file` request expansion. A path segment or
+  // keyword expression that happens to contain `@` names no argument file.
+  assertAllowed("pytest tests/@fixtures/test_x.py")
+  assertAllowed("pytest -k name@example")
+  assertAllowed("pytest -k unit")
+  assertAllowed("python3 -m pytest -k unit")
+})
+
+test("npm refuses the options that redirect its script shell, prefix or configuration", () => {
+  for (const [command, reasonPart] of [
+    ["npm test --script-shell=/tmp/evil", "--script-shell"],
+    ["npm test --shell /tmp/evil", "--shell"],
+    ["npm run build --prefix /tmp", "--prefix"],
+    ["npm test --userconfig=/tmp/npmrc", "--userconfig"],
+    ["npm test --globalconfig /tmp/npmrc", "--globalconfig"],
+  ] as const) {
+    assertDenied(command, reasonPart)
+  }
+  assertAllowed("npm test")
+  assertAllowed("npm run typecheck")
+})
+
+test("npm refuses single-dash and abbreviated forms of the denied options", () => {
+  // npm accepts a long option with one dash and any unambiguous prefix, so
+  // the five names cannot be matched only in their `--name` spelling.
+  for (const command of [
+    "npm test -script-shell=/tmp/evil",
+    "npm test --script=/tmp/evil",
+    "npm test --prefi=/tmp",
+    "npm test --userconf=/tmp/npmrc",
+    "npm test --globalconf=/tmp/npmrc",
+    "npm test --script-shel=/tmp/evil",
+  ]) {
+    assertDenied(command, "denied npm option")
+  }
+  assertAllowed("npm test")
+  assertAllowed("npm run build")
+  assertAllowed("npm ls")
+  assertAllowed("npm test --silent")
+  assertAllowed("npm test -s")
+  assertAllowed("npm run build -- --check")
+})
+
+test("the polyglot runner policies are fail-closed flag allowlists", () => {
+  // The allowed surface: every option is named in the runner's table, a
+  // value-taking flag consumes its value, and the subcommand/module set is
+  // closed. These are the eval commands and the shapes the docs use.
+  for (const command of [
+    "pytest -v -k unit",
+    "pytest --cov=src",
+    "pytest --cov tests/",
+    "pytest tests/",
+    "go test -race ./...",
+    "go vet ./...",
+    "go test -v -race ./...",
+    "cargo test --release",
+    "cargo clippy -- -D warnings",
+    "cargo test -- --test-threads 4 --nocapture",
+    "make -j4 test",
+    "make -j 4 test",
+    "node --test",
+    "node --test-reporter=spec tests/run.js",
+    "python3 -m unittest",
+    "python3 -m pytest -q",
+    "python3 -munittest",
+  ]) {
+    assertAllowed(command)
+  }
+
+  // The refused surface. The first two carry parentheses, so the character
+  // policy fires before the module policy; the paired `pass` form below proves
+  // the module check itself. Everything else names the token or the rule.
+  const refused: readonly (readonly [string, string])[] = [
+    ['python3 -m timeit -s "print(1)" "1+1"', "denied"],
+    ['python3 -mtimeit -s "print(1)" "1+1"', "denied"],
+    ["python3 -m timeit -s pass 1", "module: `timeit`"],
+    ["python3 -mtimeit -s pass 1", "module: `timeit`"],
+    ["python3 -m pdb", "module: `pdb`"],
+    ["python3 -m http.server", "module: `http.server`"],
+    ["python3 -m pip install x", "module: `pip`"],
+    ["cargo test --config build.rustc-wrapper=/bin/echo", "--config"],
+    ["cargo test -Z unstable-options", "not in cargo's flag allowlist"],
+    ["pytest -p evil", "not in pytest's flag allowlist"],
+    ["pytest --pdb", "--pdb"],
+    ["go test -toolexec ./evil ./...", "-toolexec"],
+    ["go vet -vettool=./evil ./...", "-vettool"],
+    ["make -E evil test", "not in make's flag allowlist"],
+    ["node -p process.env", "not in node's flag allowlist"],
+  ]
+  for (const [command, reasonPart] of refused) assertDenied(command, reasonPart)
+
+  // A bare `--` passes only where the subcommand names a post-`--` allowlist.
+  assertAllowed("cargo test -- --nocapture")
+  assertAllowed("cargo clippy -- -D warnings")
+  assertDenied("cargo check --", "no post-`--` allowlist")
+  assertDenied("go test -- ./...", "no post-`--` allowlist")
+  assertDenied("pytest -- tests/", "no post-`--` allowlist")
+  assertDenied("make -- test", "no post-`--` allowlist")
+  assertDenied("node -- tests/run.js", "no post-`--` allowlist")
+  assertDenied("cargo test -- --unknown-flag", "not in cargo's flag allowlist")
 })
 
 test("denies file mutators flat", () => {
@@ -442,6 +705,14 @@ test("git's exec-channel options, =forms of globals and :: transport are refused
   assertDenied("git fetch origin --upload-pack id", "--upload-pack")
   assertDenied("git ls-remote --upload-pack ./x", "--upload-pack")
   assertDenied("git grep --open-files-in-pager id hello", "--open-files-in-pager")
+  // `-O` is the short form of --open-files-in-pager: attached, separate and
+  // bare forms all run the named program (or the one git's pager config names).
+  assertDenied("git grep -O/bin/sh -- hello", "-O")
+  assertDenied("git grep -O ./pg.sh -- hello", "-O")
+  assertDenied("git grep -O -- hello", "-O")
+  assertDenied("git grep -O", "-O")
+  assertAllowed("git grep -n hello")
+  assertAllowed("git grep hello")
   assertDenied("git diff --ext-diff HEAD", "--ext-diff")
   assertDenied("git blame --textconv file.ts", "--textconv")
   assertDenied("git log --git-dir /x", "git global option")
@@ -451,6 +722,35 @@ test("git's exec-channel options, =forms of globals and :: transport are refused
   assertAllowed("git log --oneline -3")
   assertAllowed("git fetch origin")
   assertAllowed("git remote show origin")
+})
+
+test("git long options match any unambiguous prefix, including exec channels and --output", () => {
+  // Git accepts a prefix of a long option: `--up=…` reaches --upload-pack,
+  // which runs the named program. Exact matching alone missed every form.
+  const denied: readonly (readonly [string, string])[] = [
+    ["git ls-remote --u=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --up=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upl=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upload-p=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upload-pack=/tmp/pw origin", "--upload-pack"],
+    ["git grep --open=echo hello", "--open-files-in-pager"],
+    ["git grep --open-files-in-pager=echo hello", "--open-files-in-pager"],
+    ["git diff --ext HEAD", "--ext-diff"],
+    ["git diff --ext-diff HEAD", "--ext-diff"],
+    ["git blame --textc f", "--textconv"],
+    ["git blame --textconv f", "--textconv"],
+    ["git show --out=/tmp/x HEAD", "--output"],
+    ["git diff --out /tmp/x HEAD", "--output"],
+    ["git log --outp=/tmp/x", "--output"],
+    ["git -c alias.pwn=id pwn", "git global option"],
+  ]
+  for (const [command, reasonPart] of denied) assertDenied(command, reasonPart)
+  // The read-only surface is untouched: none of these heads prefixes a denied
+  // long option.
+  assertAllowed("git log --oneline")
+  assertAllowed("git diff --stat")
+  assertAllowed("git show --name-only")
+  assertAllowed("git log --oneline -3")
 })
 
 test("sort and uniq accept only their read-only flag allowlist", () => {

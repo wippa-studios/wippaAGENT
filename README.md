@@ -20,7 +20,7 @@
 
 ### The only OpenCode setup you'll need.
 
-**One orchestrator that can't touch your code. Twelve specialists that can.<br/>
+**One orchestrator that writes nothing but the plan. Twelve specialists that write the rest.<br/>
 Exit codes, not opinions, decide when the work is done.**
 
 Install once, point the config at the orchestrator, and every project gets the same roster,<br/>
@@ -33,7 +33,7 @@ the same routing and the same review discipline.
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
-![Tools](https://img.shields.io/badge/tools-7-f59e0b?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-8-f59e0b?style=for-the-badge)
 
 [![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
 [![Listed on awesome-software-factories](https://img.shields.io/badge/listed%20on-awesome--software--factories-blue)](https://github.com/varun1505/awesome-software-factories)
@@ -58,11 +58,11 @@ the same routing and the same review discipline.
     <td align="center" width="25%"><h2>1</h2><b>Primary agent</b><br/><sub>Plans, delegates, verifies</sub></td>
     <td align="center" width="25%"><h2>12</h2><b>Subagents</b><br/><sub>Implementation and review</sub></td>
     <td align="center" width="25%"><h2>3</h2><b>MCP servers</b><br/><sub>GitHub, docs, browser</sub></td>
-    <td align="center" width="25%"><h2>7</h2><b>Plugin tools</b><br/><sub>Roster lookup, verification and diff reading</sub></td>
+    <td align="center" width="25%"><h2>8</h2><b>Plugin tools</b><br/><sub>Roster lookup, session continuation, verification, diff reading and wippa_plan_update</sub></td>
   </tr>
 </table>
 
-wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup, an acceptance verifier and diff reading.
+wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup, subagent session continuation, an acceptance verifier, diff reading and the `wippa_plan_update` plan-ledger write.
 
 <br/>
 
@@ -116,7 +116,7 @@ Most agent loops let one model plan the change, write it, grade it and declare v
 | | A typical single-agent loop | wippaAGENT |
 |---|---|---|
 | **Who decides it's done?** | The agent that wrote the code | The exit code of your acceptance command, run through `wippa_verify` |
-| **Who can edit files?** | Whoever is running | Never the orchestrator. Edit and shell are denied to it by design |
+| **Who can edit files?** | Whoever is running | Never the orchestrator, apart from the plan ledger. Edit and shell are denied to it by design; it writes no other file |
 | **Who reviews the diff?** | Often nobody | On Normal and High-risk work, a reviewer sees the diff before anything is reported done |
 | **What if review keeps failing?** | Loops until it gives up or burns budget | Stops after two iterations and escalates, with the cost of a fix and a decision for you |
 | **What survives the session?** | Whatever the context window held | A plan ledger on disk at `.opencode/PLAN.md` |
@@ -124,25 +124,29 @@ Most agent loops let one model plan the change, write it, grade it and declare v
 
 ### Design principles
 
-1. **Separation of duties.** The agent that plans does not write, and the agent that reviews does not fix. The reviewers (`quality-auditor`, `security-reviewer`) are denied edit.
+1. **Separation of duties.** The agent that plans does not write the implementation, and the agent that reviews does not fix. The reviewers (`quality-auditor`, `security-reviewer`) are denied edit.
 2. **Verdicts come from exit codes.** A pass is a zero exit code from a real command, never a model's say-so.
 3. **Enforce in permissions, document the rest.** What OpenCode rules can enforce, they enforce. What is only a prompt convention is labelled as one. See the [Trust model](#trust-model).
 4. **Auditable routing.** Every request is triaged into a tier, and the tier is written into the plan.
 5. **Lean by contract.** The prompt corpus has a token budget enforced in CI, so the setup does not quietly bloat. See [Prompt budget](#prompt-budget).
 6. **Additive installs.** The installer never touches files it did not create, and never overwrites without `--force`.
 
-### Evidence of effectiveness (Eval outcomes)
+### What the eval scenarios cover
 
-| Scenario | Domain & Tier | Expected Chain | Invariant / Defect Tested | Reviewer Finding | Acceptance Command | Verdict |
-|---|---|---|---|---|---|---|
-| **01 Plain Bug Fix** | Core Dev<br/>`Trivial` | `core-developer` | Regression safety | Skipped (Trivial tier) | `npm test` | **PASS** (exit 0) |
-| **02 Security Review** | Quality & Sec<br/>`Normal` | `security-reviewer` | Input sanitization | Clean review, no blocking sinks | `npm test` | **PASS** (exit 0) |
-| **03 Research Lookup** | Research<br/>`Normal` | `research-analyst` | Library documentation | Current Context7 documentation cited | None (Report check) | **PASS** (terms cited) |
-| **04 Domain Playbook Load** | Fintech<br/>`Normal` | `domain-specialist` | Webhook idempotency | Loaded payment playbook, enforced retry safety | None (Report check) | **PASS** (idempotency key enforced) |
-| **05 Polyglot Pytest Runner** | Python / API<br/>`Normal` | `language-specialist` → `quality-auditor` | Test suite execution via `wippa_verify` | Passed unit & boundary suite | `pytest tests/` | **PASS** (exit 0) |
-| **06 Polyglot Go Test Runner** | Go / Systems<br/>`Normal` | `language-specialist` → `quality-auditor` | Concurrency race detection | Passed `-race` check | `go test -v ./...` | **PASS** (exit 0) |
-| **07 High-Risk Auth Recon** | Auth / Secrets<br/>`High-risk` | `research-analyst` → `core-developer` → `security-reviewer` | Timing attack vulnerability | Caught plaintext token compare; required constant-time compare | None (Audit check) | **PASS** (constant-time verified) |
-| **08 Two-Iteration Escalation** | Architecture<br/>`High-risk` | `core-developer` ⇄ `quality-auditor` (2x) | Breaking schema change | Stopped at cap; escalated open risk with fix cost to user | None (Ledger escalation) | **PASS** (bounded escalation) |
+The table lists the eight scenarios on files at commit `332a726`. Scenario files carry no tier field; the table shows what each scenario defines. One `--check` pass parsed and validated each file without dispatching a model; report terms are parsed in this mode, not matched against a report. The Evidence column names the check each scenario defines, not an observed result. No live model dispatch has been recorded, no single-agent baseline has been run, and this is a single validation pass rather than a series, so it is coverage and format evidence, not a measured effect.
+
+| Scenario | Chain | What it checks | Evidence |
+|---|---|---|---|
+| **01 Plain Bug Fix** | `core-developer` | Regression safety in a small bug fix | `npm test` (exit-code check) |
+| **02 Security Review** | `security-reviewer` | Input-handling review finds no blocking findings | `npm test` (exit-code check) |
+| **03 Research Lookup** | `research-analyst` | Current library documentation is found and cited | acceptance criteria only; no report terms |
+| **04 Domain Playbook Load** | `domain-specialist` | Payment webhook idempotency and the named domain reference | report terms: `references/payment-processing-and-checkout.md`, `network retry cannot double-charge` |
+| **05 Polyglot Pytest Runner** | `language-specialist` → `quality-auditor` | Python suite execution and review of type hints and error handling | report terms: `pytest`, `passed` |
+| **06 Polyglot Go Test Runner** | `language-specialist` → `quality-auditor` | Go race detection and review of channel synchronization and context cancellation | report terms: `go test`, `PASS` |
+| **07 High-Risk Auth Recon** | `research-analyst` → `core-developer` → `security-reviewer` | Timing-attack review of token comparison after recon | report terms: `constant-time`, `timing attack` |
+| **08 Two-Iteration Escalation** | `core-developer` ⇄ `quality-auditor` (2x) | Two-iteration reviewer cap and escalation with open findings | report terms: `escalation`, `open findings` |
+
+Scenarios 03 to 08 have no acceptance command, so in a live run their verdict is a report-term match (or, for 03, the acceptance criteria) and they do not exercise the exit-code guarantee. Scenarios 01 and 02 run this repository's own `npm test`, so they prove the command surface works, not the routed agent's behaviour.
 
 <br/>
 
@@ -215,7 +219,7 @@ flowchart TB
 
 > Nothing is reported as done until the acceptance command has returned a zero exit code, and no Normal or High-risk work is reported done before a reviewer has seen the diff.
 
-**Narrowing broad specialists.** The twelve subagents are category-level shells. When dispatching a specialist, the orchestrator names its exact role framing (e.g. `FastAPI Specialist`, `Postgres Query Optimizer`) and the matching topic file from its playbooks table. The subagent loads that single reference file, giving it deep, opinionated domain expertise without paying for 100+ always-on agent definitions.
+**Narrowing broad specialists.** The twelve subagents are category-level shells. When dispatching a specialist, the orchestrator names its exact role framing (e.g. `FastAPI Specialist`, `Postgres Query Optimizer`) and the matching topic file from its playbooks table, or the `domain-playbooks` reference for `domain-specialist`. The subagent loads that single reference file, giving it deep, opinionated domain expertise without paying for 100+ always-on agent definitions.
 
 Four behaviours separate this setup from a plain roster of agents.
 
@@ -227,7 +231,7 @@ Every request is classified before a plan is written, and the tier decides the c
 |------|-----------|-------|
 | **Trivial** | Single-file, low-risk work with no behavioural, auth, input, secret, dependency, CI or config impact | Straight to the owning implementer. No audit pass. |
 | **Normal** | Everything in between | Brief → delegate → audit → review |
-| **High-risk** | Auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way | Cheap recon pass before anything is written, then a review that cannot be waived |
+| **High-risk** | Auth, input handling, secrets, dependencies, or anything touching CI or config in a breaking way; any diff that touches the files the acceptance command runs (test files, `conftest.py`, `Makefile`, `package.json` scripts, runner configuration) | Cheap recon pass before anything is written, then a review that cannot be waived |
 
 Tiers escalate, never de-escalate, and the tier chosen is stated in the plan so the routing is auditable. High-risk or structural changes are presented for your approval before any code is written.
 
@@ -283,7 +287,7 @@ The review loop runs at most **two iterations** per piece of work. After the sec
 
 **The plan ledger** lives on disk at `.opencode/PLAN.md` in the working directory. It holds the agreed plan, the decisions made (including tier calls and tie-break routings), the work items in flight and completed, and the open risks. Every item names its owner subagent and its acceptance criterion.
 
-The orchestrator denies itself edit, so it delegates the file write with the exact content verbatim. The next session reads the ledger first, and where the ledger and the repository disagree, **the repository is the truth**.
+The orchestrator calls `wippa_plan_update` with the full markdown for the ledger. The tool takes no path argument and writes `<workspace>/.opencode/PLAN.md` and nothing else; it refuses a symlink at that path or at the `.opencode` directory, dangling or not, or a hard link at that path, and asserts its own `plan_update` permission before it writes. The next session reads the ledger first, and where the ledger and the repository disagree, **the repository is the truth**.
 
 **The return contract.** Every subagent returns the same fixed schema in its final message:
 
@@ -328,21 +332,26 @@ Permissions are enforced by OpenCode rules, not by prompts. This section is expl
 
 | Guarantee | Mechanism | Strength |
 |-----------|-----------|----------|
-| The orchestrator cannot edit files or run a shell | `edit` and `shell` denied in its frontmatter | **Enforced** by OpenCode permissions |
+| The orchestrator cannot edit repository files or run a shell | `edit` and `shell` denied in its frontmatter | **Enforced** by OpenCode permissions |
+| The orchestrator writes exactly one file | `wippa_plan_update` takes no path argument, writes only `<workspace>/.opencode/PLAN.md`, refuses a symlink at that path or at the `.opencode` directory (dangling or not), or a hard link at that path, and asserts the `plan_update` permission before it writes | **Enforced** |
 | The only command the orchestrator can trigger is the acceptance command | `wippa_verify`, behind its own `verify` permission and a pre-spawn guard | **Enforced**, with a documented residual (below) |
+| A modified test harness is not run without acknowledgement | `wippa_verify` reads the working diff before spawning; a changed test file, `conftest.py`, `Makefile`, `package.json` or runner configuration, including `.cargo/config.toml`, `Cargo.lock` and `go.mod`, returns `harness-modified` with the `harnessChanges` file list and runs only with `acknowledgeHarnessChanges: true`; a diff that cannot be read reports `harnessCheck: "skipped"` | **Enforced** (heuristic file match); treating a harness change as High-risk is a **Convention** |
 | Reviewers cannot fix their own findings | `edit` denied for `quality-auditor` and `security-reviewer` | **Enforced** |
 | Subagents cannot start further subagents | `experimental.subagent_depth` is `1` | **Enforced** (checkout config; installed scopes use OpenCode's documented default, which matches) |
 | GitHub reach is narrow | `github` server registered with the `repos`, `issues`, `pull_requests` and `actions` toolsets only, plus the scope of your token | **Enforced** at registration; the token scope is the real limit |
 | Routing: which agent owns what | Prompt text | **Convention** |
+| Which playbook a specialist loads | The `## Playbooks` table in its agent definition, or the `domain-playbooks` index for `domain-specialist` | **Convention** |
 | The "report only to me" line in every brief | Prompt text | **Convention** |
 
 ### How `wippa_verify` is guarded
 
 `wippa_verify` runs the command you give it, so it is behind its own permission action: the tool asserts `verify` with the command as the resource before it spawns anything, and the same rule list that governs `shell` governs it. The shipped frontmatter repeats the shell guards as `verify` rules, so a host with no rules configured is still not left without a guard.
 
-On top of that assertion sits a guard that runs before the permission check and before any spawn. It is an allowlist of the acceptance surface with a character policy on top. **It is not a sandbox.** Its single source is `tools/guards.ts`; every statement below is derived from it. A command that fails the guard never runs, and the reason is returned in the result.
+On top of that assertion sits a guard that runs before the permission check and before any spawn. It is an allowlist of the acceptance surface with a character policy on top. **It is not a sandbox.** The command allowlist, the per-runner flag allowlists and the character policy are defined in `tools/guards.ts`; a command that fails the guard never runs, and the reason is returned in the result.
 
-The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. A caller's `cwd` must not contain `..` segments, line breaks or null bytes, or it is refused with a stated reason.
+The call runs asynchronously, stops when the call is cancelled, and is bounded by a 5-minute default timeout and capped output. A caller's `cwd` must resolve to a directory inside the workspace and must not contain `..` segments, line breaks or null bytes, or it is refused with a stated reason.
+
+Before it spawns anything, `wippa_verify` reads the working diff and matches changed and added files against the runner's harness surface. If the test file, `conftest.py`, `Makefile`, `package.json` or runner configuration has been modified, it returns `reason: "harness-modified"` with the `harnessChanges` file list and does not run unless the caller passes `acknowledgeHarnessChanges: true`. If the diff cannot be read it runs and reports `harnessCheck: "skipped"`. Detection is a heuristic file match, not a sandbox, and the diff service decides which files it can see.
 
 <details>
 <summary><b>Character policy</b></summary>
@@ -353,6 +362,7 @@ The call runs asynchronously, stops when the call is cancelled, and is bounded b
 - Only `&&` chains are accepted. Any `&` that is not exactly `&&` (so `&&&` too) is refused.
 - A segment beginning `NAME=` is refused as an environment-variable assignment prefix.
 - A command word may not be a path. Only the exact string `./install.sh` may be run by path, so a planted `./file` cannot be executed.
+- An unquoted backslash, or an unquoted glob metacharacter (`*`, `?`, `[`, `]`) or brace expansion, is refused: the shell would rewrite it into an argument the guard did not inspect. The same characters inside quotes are data and stay allowed.
 
 </details>
 
@@ -363,15 +373,17 @@ The call runs asynchronously, stops when the call is cancelled, and is bounded b
 
 Every segment's command word must be on this list, or be exactly `./install.sh`, or the segment never runs.
 
+The six test runners below (`pytest`, `go`, `cargo`, `make`, `node` and `python3`/`python`) accept only the flags named in their allowlist; any other flag is refused with the flag named in the reason.
+
 | Command | What is allowed |
 |---------|-----------------|
-| `npm` | Only `test`, `run` and `ls`. The subcommand must come immediately after `npm`, and any option in that position fails closed, so `npm pkg set`, `npm config set` and `npm --yes exec` are refused. |
-| `pytest` | Test execution (`pytest`, `pytest tests/`, `pytest -v -k unit`, `pytest --cov=src`). Interactive debugger `--pdb` is refused. |
-| `go` | Only `test` and `vet` subcommands (e.g. `go test ./...`, `go vet ./...`). `-exec` and `--exec` are refused. |
-| `cargo` | Only `test`, `check` and `clippy` subcommands (e.g. `cargo test`, `cargo check`, `cargo clippy`). |
-| `make` | Targets and flags without directory escapes or external file execution (e.g. `make`, `make test`, `make check`). `-C`, `--directory`, `-f`, `--file`, `--makefile` and `--eval` are refused. |
-| `node` | Test runner and scripts (e.g. `node --test`, `node tests/runner.js`). Eval flags (`-e`, `--eval`), interactive REPL (`-i`, `--interactive`), and preloads (`-r`, `--require`, `--import`, `--loader`) are refused. |
-| `python3` / `python` | Test runners and modules (e.g. `python3 -m unittest`, `python3 -m pytest`, `python3 tests/run.py`). Eval flag (`-c`) and interactive REPL (`-i`) are refused. |
+| `npm` | Only `test`, `run` and `ls`. The subcommand must come immediately after `npm`, and any option in that position fails closed, so `npm pkg set`, `npm config set` and `npm --yes exec` are refused. Options that select another shell or config are refused: `--script-shell`, `--shell`, `--prefix`, `--userconfig` and `--globalconfig`. |
+| `pytest` | Test execution with positional paths and `-k` values (e.g. `pytest`, `pytest tests/`, `pytest -k unit`). `--pdb`, `--trace`, `-p`, `-c` and `-o` are refused. |
+| `go` | Only `test` and `vet` subcommands (e.g. `go test -v ./...`, `go vet ./...`). Positional packages pass. `-exec`, `-toolexec` and `-vettool` are refused. |
+| `cargo` | Only `test`, `check` and `clippy` subcommands (e.g. `cargo test`, `cargo check`, `cargo clippy`). `--config`, `-Z` and `--manifest-path` are refused. |
+| `make` | Targets pass (e.g. `make`, `make test`, `make check`). `-C`, `-f`, `-I` and `-E` are refused. |
+| `node` | Test runner and scripts (e.g. `node --test`, `node tests/runner.js`). Script paths pass. `-e`, `-p`, `-r`, `--import` and `--loader` are refused. |
+| `python3` / `python` | Test modules and scripts (e.g. `python3 -m unittest`, `python3 -m pytest`, `python3 tests/run.py`). `-m` accepts only `unittest` and `pytest`, including the attached `-munittest` form. `-c` is refused. |
 | `git` | Only `status`, `log`, `diff`, `show`, `blame`, `ls-remote`, `rev-parse`, `describe`, `grep`, `shortlog`, `fetch`, plus `branch` and `remote` in pure-listing form. |
 | Read-only utilities | `grep`, `rg`, `cat`, `head`, `tail`, `wc`, `ls`, `test`, `echo`, `true`, `false`, `basename`, `dirname`, `realpath`, `pwd`, `sort`, `uniq`, `tr`, `cut`, `stat`, `sha256sum`, `which`, `date`. `sort` and `uniq` only under their read-only flag allowlist; `rg` without `--pre` and `--pre-glob`. |
 | Inert utilities | `sleep`, `seq`, `exit` |
@@ -403,7 +415,10 @@ Each is refused with a reason.
 </details>
 
 > [!IMPORTANT]
-> **Documented residual.** `npm test` and `npm run <script>`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test`, and `python3 -m unittest` execute whatever the project scripts or tests contain; the guard inspects the command invocation, not the script body. Beyond that, each allowlisted command is policed only where `tools/guards.ts` writes a rule (git's global and exec-channel options, the `sort` and `uniq` flag allowlists, `rg`'s denied `--pre` flags, `bash`'s positional rule, and per-command rules for `go`, `cargo`, `pytest`, `make`, `node` and `python3`), so an option no rule names is passed through to the command itself. An allowed command runs with the authority of the user running OpenCode, and `package.json` scripts are trusted input. Treat an acceptance command as you would any shell command.
+> **Documented residual.** The acceptance commands execute whatever the project's test files, `conftest.py`, `Makefile`, `package.json`, runner configuration (including `.cargo/config.toml`, `Cargo.lock` and `go.mod`) and scripts contain; the guard inspects the command line, not the code that command runs. Each runner is a fail-closed flag allowlist, so an option outside its list is refused rather than passed through, and the character policy and command allowlist still apply. A further residual is the harness itself: `wippa_verify` lists the harness files when the working diff touches them and refuses to run until the caller acknowledges the change. Treat a harness change as High-risk work. An allowed command still runs with the authority of the user running OpenCode.
+
+> [!NOTE]
+> **What the harness check does not see.** The check compares the file names in the working diff against what the command runs, so it cannot see a path named on the command line that lives outside the repository, a harness committed before the working diff, an included makefile without a `.mk` suffix, or a custom unittest `-p` pattern. It is a policy gate, not a sandbox.
 
 ### How `wippa_diff` is guarded
 
@@ -413,13 +428,15 @@ Each is refused with a reason.
 
 | Agent | edit | shell | verify | everything else |
 |-------|------|-------|--------|-----------------|
-| `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
+| `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` and `subagent_continue *` allowed |
 | `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `quality-auditor` | denied | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `security-reviewer` | denied | allowed | `rm -rf *`, `sudo *` and `git push --force *` denied | `rm -rf *`, `sudo *` and `git push --force *` denied |
 | `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
 | `research-analyst`, `product-strategist` | allowed | deny all shell | deny all verify | no additional deny rules; read, web and MCP tools remain reachable |
+
+`wippaAGENT` alone declares both `plan_update` and `subagent_continue`; the subagents declare neither.
 
 ### MCP reach
 
@@ -432,9 +449,9 @@ No rule restricts MCP reach per agent: every agent can reach the `github`, `cont
 
 ## Tools and MCP servers
 
-### The seven plugin tools
+### The eight plugin tools
 
-The bundled plugin adds seven tools: four for finding and reading the roster, one for checking work, one for reading a diff, and one for updating the session plan ledger.
+The bundled plugin adds eight tools: four for finding and reading the roster, one for continuing the latest session of a named subagent, one for checking work, one for reading a diff, and one for updating the session plan ledger.
 
 | Tool | Question it answers |
 |------|---------------------|
@@ -442,9 +459,10 @@ The bundled plugin adds seven tools: four for finding and reading the roster, on
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
-| `wippa_verify` | Did the acceptance command pass? Runs it asynchronously with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. Runs `npm test/run`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test`, and `python3 -m unittest`. Commands outside the [guard](#how-wippa_verify-is-guarded) never run. |
+| `wippa_subagent_continue` | How do I resume the work of a subagent without naming a session? Continues the newest child session of the named subagent under the current session: it takes no session id, parent id or path, asserts the `subagent_continue` permission before listing anything, and returns the session id as output only. |
+| `wippa_verify` | Did the acceptance command pass? Runs it asynchronously with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. Runs `npm test/run`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test` and scripts, and `python3 -m unittest` or `python3 -m pytest`. Each runner accepts only its allowlisted flags, and a modified harness is refused until the caller acknowledges it. Commands outside the [guard](#how-wippa_verify-is-guarded) never run. |
 | `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries (patch, additions, deletions, status), so the orchestrator can read the diff itself without a shell. |
-| `wippa_plan_update` | How to record decisions and progress without child agent hops? Writes or updates the session plan ledger at `.opencode/PLAN.md` exclusively within the workspace. |
+| `wippa_plan_update` | How to record decisions and progress without child agent hops? Writes exactly `<workspace>/.opencode/PLAN.md`: it takes no path argument and writes no other file, refuses a symlink at that path or at the `.opencode` directory (dangling or not), or a hard link at that path, and asserts the `plan_update` permission before the write. |
 
 **What the catalog contains.** The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override and the bundle's own tree are indexed in full.
 
@@ -653,7 +671,7 @@ Restart OpenCode after changing the config so the new roster is picked up.
 ## FAQ
 
 **Why can't the orchestrator just make a small edit itself?**
-By design. Keeping edit and shell away from the agent that plans and judges is what makes its verdict trustworthy. Small, safe changes still skip the ceremony: the Trivial tier goes straight to the owning implementer with no audit pass.
+By design, with one exception: it writes the plan ledger through `wippa_plan_update`, and nothing else. Keeping edit and shell away from the agent that plans and judges is what makes its verdict trustworthy. Small, safe changes still skip the ceremony: the Trivial tier goes straight to the owning implementer with no audit pass.
 
 **What happens when the reviewer and the implementer can't agree?**
 After two review iterations, the orchestrator stops and escalates to you with what is still broken, what a fix would cost, and whether to accept, defer or fund another round.
@@ -665,7 +683,7 @@ Yes. List their ids in `WIPPA_CUSTOM_AGENT_IDS` and the tools plugin indexes the
 Only if you pass `--apply-config`, and then only by adding keys you are missing. Keys you already set are kept, and when everything is already present the file is left byte-identical.
 
 **Is `wippa_verify` a sandbox?**
-No. It is an allowlist guard with a character policy, plus a permission check. An allowed command runs with your authority, and `package.json` scripts are trusted input. See [How `wippa_verify` is guarded](#how-wippa_verify-is-guarded).
+No. It is a fail-closed command allowlist with a character policy, a permission check and a harness-diff gate. Once a command is allowed, the project's test files, `conftest.py`, a `Makefile` or an npm script decide what it runs. When the working diff touches those harness files, the tool lists them and refuses until the caller acknowledges the change. An allowed command still runs with your authority. See [How `wippa_verify` is guarded](#how-wippa_verify-is-guarded).
 
 **Does it work in CI or scripts?**
 The installer is fully non-interactive, so it runs unattended. Use `--dry-run` to preview and `--project DIR` to target a specific directory.
@@ -685,6 +703,30 @@ The prompt corpus (the primary agent plus the twelve subagents) is budgeted at *
 | Always-on skill listing | **1,250** estimated tokens | Skill bodies load only when called, but OpenCode advertises each skill's id, name and description at every model step |
 
 `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included. Around the list OpenCode emits a fixed prologue and an `<available_skills>` wrapper, about **110 estimated tokens**, reported separately by the script. The full always-on skill surface today is about **1,181 estimated tokens**.
+
+### OpenCode memory
+
+The session database grows with conversation history. On this machine `opencode.db` measured **888 MB** when this section was written, while `snapshot/` was empty, so deleting snapshots alone does not reclaim the space. The log measured 27 MB and the WAL 14 MB.
+
+`npm run opencode` launches the CLI through `scripts/opencode.sh`. The wrapper does not assume a V8 runtime: `WIPPA_OPENCODE_RUNTIME` accepts `auto` (the default), `node` or `bun`. With `node` it appends `--max-old-space-size=2048` to `NODE_OPTIONS` before `exec` unless a heap flag is already present, and `WIPPA_OPENCODE_HEAP_MB` changes the cap between 256 and 8192. With `bun` it leaves `NODE_OPTIONS` alone and prints one line saying the shipped Bun binary ignores the V8 flag; `WIPPA_OPENCODE_ADDRESS_SPACE_MB` opts into a hard `ulimit -v` address-space limit in MiB, and a low value can abort the process. `auto` reads the first line of the launcher for `node` or `bun`, and for an ELF binary treats a `Bun v` string as bun, defaulting to bun with a warning when the heuristic does not match. A leading `--wrapper-help` is consumed by the wrapper; `--help` and `-h` are passed through to OpenCode.
+
+`npm run clean:opencode` runs `scripts/opencode-memory.sh`. It is a read-only report by default: the data directory, the database, WAL, log and snapshot sizes, and what `--apply` and `--vacuum` would do. A dry run works while OpenCode is running. `--apply` prunes the contents of `snapshot/` and rotates `log/opencode.log` to `log/opencode.log.1`, but refuses while an opencode process is running because that process holds the log descriptor and snapshots are revert points. `--vacuum` does both, then takes a consistent SQLite backup of the database with `.backup` to `opencode.db.bak-<YYYYmmddHHMMSS>.XXXXXX`, created exclusively with `mktemp` at mode 600, and runs `wal_checkpoint(TRUNCATE)` followed by `VACUUM`; it requires `--yes`. The process check asks `fuser` whether any process holds `opencode.db`; where `fuser` is unavailable it falls back to `pgrep -x opencode`, which matches only that exact process name and can miss a differently named launcher. An unreadable data path, such as a snapshot directory that cannot be listed, fails the report with a stated reason instead of printing zero.
+
+The data directory is resolved from `OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`, then `~/.local/share/opencode` (`~/Library/Application Support/opencode` on macOS). Never delete `opencode.db` directly. The vacuum path prints the backup location, and the script never removes the database or a backup.
+
+### Specialist playbooks
+
+The specialist playbooks live under `skills/specialist-playbooks/references/<agent-id>/`, with one folder for each agent id that routes to the skill: **175 markdown files across 11 folders**. Eleven of the twelve subagent definitions carry a `## Playbooks` table naming their own files; `domain-specialist` routes to the `domain-playbooks` skill instead.
+
+Reference bodies load on demand. They are outside the 35,000-token corpus and the 1,250-token listing budgets; in the agent file, only the `## Playbooks` section is paid for, and it counts against the 3,000-token per-agent ceiling and the 35,000-token corpus ceiling.
+
+To add a playbook:
+
+1. Create `skills/specialist-playbooks/references/<agent-id>/<topic>.md`, and make its first `#` heading exactly the topic text.
+2. Add one row to that agent's `## Playbooks` table, with the topic in the first column and the file name in backticks in the second.
+3. Run `npm test`. `scripts/playbooks.test.ts` checks the folders and the tables one to one, so a file without a row, a row without a file, or a heading that differs from its topic fails the suite.
+
+The `domain-playbooks`, `powershell-automation-playbooks` and `reinforcement-learning-playbooks` skills follow the same pattern: a `SKILL.md` index, reference files under `references/`, and bodies that load on demand.
 
 ### Continuous integration
 

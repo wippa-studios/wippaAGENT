@@ -62,15 +62,23 @@ It installs the agent set into the repository's local `.opencode/` scope (`insta
 
 The manual `.github/workflows/dispatch-eval.yml` workflow runs live mode when the `OPENCODE_EVAL_MODEL` and `OPENCODE_EVAL_API_KEY` repository secrets exist, and prints a notice and exits green when they do not — public CI has no model credentials, and that is an expected state. `scripts/opencode-smoke.mjs` (`npm run check:smoke`) is the credential-free counterpart: it proves the installed tree loads on a real binary (every agent resolves, the tools plugin loads) but does not dispatch a model or execute a tool.
 
-## Published eval outcomes
+## Scenario coverage
 
-| Scenario | Domain & Tier | Expected Chain | Invariant / Defect Tested | Reviewer Finding | Acceptance Command | Verdict |
-|---|---|---|---|---|---|---|
-| **01 Plain Bug Fix** | Core Dev<br/>`Trivial` | `core-developer` | Regression safety | Skipped (Trivial tier) | `npm test` | **PASS** (exit 0) |
-| **02 Security Review** | Quality & Sec<br/>`Normal` | `security-reviewer` | Input sanitization | Clean review, no blocking sinks | `npm test` | **PASS** (exit 0) |
-| **03 Research Lookup** | Research<br/>`Normal` | `research-analyst` | Library documentation | Current Context7 documentation cited | None (Report check) | **PASS** (terms cited) |
-| **04 Domain Playbook Load** | Fintech<br/>`Normal` | `domain-specialist` | Webhook idempotency | Loaded payment playbook, enforced retry safety | None (Report check) | **PASS** (idempotency key enforced) |
-| **05 Polyglot Pytest Runner** | Python / API<br/>`Normal` | `language-specialist` → `quality-auditor` | Test suite execution via `wippa_verify` | Passed unit & boundary suite | `pytest tests/` | **PASS** (exit 0) |
-| **06 Polyglot Go Test Runner** | Go / Systems<br/>`Normal` | `language-specialist` → `quality-auditor` | Concurrency race detection | Passed `-race` check | `go test -v ./...` | **PASS** (exit 0) |
-| **07 High-Risk Auth Recon** | Auth / Secrets<br/>`High-risk` | `research-analyst` → `core-developer` → `security-reviewer` | Timing attack vulnerability | Caught plaintext token compare; required constant-time compare | None (Audit check) | **PASS** (constant-time verified) |
-| **08 Two-Iteration Escalation** | Architecture<br/>`High-risk` | `core-developer` ⇄ `quality-auditor` (2x) | Breaking schema change | Stopped at cap; escalated open risk with fix cost to user | None (Ledger escalation) | **PASS** (bounded escalation) |
+The table lists the eight scenarios on files at commit `332a726`. Scenario files carry no tier field; the table shows what each scenario defines. One `--check` pass parsed and validated each file without dispatching a model; report terms are parsed in this mode, not matched against a report. The Evidence column names the check each scenario defines, not an observed result.
+
+| Scenario | Chain | What it checks | Evidence |
+|---|---|---|---|
+| **01 Plain Bug Fix** | `core-developer` | Regression safety in a small bug fix | `npm test` (exit-code check) |
+| **02 Security Review** | `security-reviewer` | Input-handling review finds no blocking findings | `npm test` (exit-code check) |
+| **03 Research Lookup** | `research-analyst` | Current library documentation is found and cited | acceptance criteria only; no report terms |
+| **04 Domain Playbook Load** | `domain-specialist` | Payment webhook idempotency and the named domain reference | report terms: `references/payment-processing-and-checkout.md`, `network retry cannot double-charge` |
+| **05 Polyglot Pytest Runner** | `language-specialist` → `quality-auditor` | Python suite execution and review of type hints and error handling | report terms: `pytest`, `passed` |
+| **06 Polyglot Go Test Runner** | `language-specialist` → `quality-auditor` | Go race detection and review of channel synchronization and context cancellation | report terms: `go test`, `PASS` |
+| **07 High-Risk Auth Recon** | `research-analyst` → `core-developer` → `security-reviewer` | Timing-attack review of token comparison after recon | report terms: `constant-time`, `timing attack` |
+| **08 Two-Iteration Escalation** | `core-developer` ⇄ `quality-auditor` (2x) | Two-iteration reviewer cap and escalation with open findings | report terms: `escalation`, `open findings` |
+
+Scenarios 03 to 08 have no acceptance command, so in a live run their verdict is a report-term match (or, for 03, the acceptance criteria) and they do not exercise the exit-code guarantee. Scenarios 01 and 02 run this repository's own `npm test`, so they prove the command surface works, not the routed agent's behaviour.
+
+### What these results do not show
+
+No live run has been recorded, so no model dispatched these scenarios. No single-agent baseline has been run, so the table cannot show a relative effect. The scenario set has one validation pass rather than a series of runs, and LLM behaviour is stochastic, so this is coverage and format evidence, not a measured effect. Scenarios 01 and 02 run this repository's own `npm test`, so even a live pass would prove the command surface, not the routed agent's behaviour.
