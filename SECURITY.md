@@ -27,14 +27,20 @@ the command string; only `&&` chains are accepted, and any `&` that is not
 exactly `&&` (so `&&&` too) is refused; a segment beginning `NAME=` is
 refused as an environment-variable assignment prefix; a command word may not
 be a path — only the exact string `./install.sh` may be run by path, so a
-planted `./file` cannot be executed.
+planted `./file` cannot be executed. An unquoted backslash, or an unquoted
+glob metacharacter (`*`, `?`, `[`, `]`) or brace expansion, is refused: the
+shell would rewrite it into an argument the guard did not inspect; the same
+characters inside quotes are data.
 
 The allowlist: every segment's command word must be named in
 `tools/guards.ts`, or be exactly `./install.sh`, or the segment is refused
 with a reason before anything spawns. The list is `npm` with only `test`,
 `run` and `ls` (the subcommand must immediately follow `npm`; any option in
 that position fails closed, so `npm pkg set`, `npm config set` and
-`npm --yes exec` are refused); `git` with only `status`, `log`,
+`npm --yes exec` are refused, and options that select another shell or config
+are refused: `--script-shell`, `--shell`, `--prefix`, `--userconfig` and
+`--globalconfig` (exact spellings; single-dash and abbreviated spellings are
+a known gap)); `git` with only `status`, `log`,
 `diff`, `show`, `blame`, `ls-remote`, `rev-parse`, `describe`, `grep`,
 `shortlog`, `fetch`, plus `branch` and `remote` in pure-listing form
 (`branch` accepts only `-a -r -v -vv -l --list --all --show-current` and no
@@ -51,9 +57,16 @@ the tool's own timeout, cancellation, truncation and exit-code tests run);
 the static checks
 `shellcheck` and `bash -n <file>` (`-n` must be the first argument, every
 later word a file name); and `./install.sh` only with
-`--dry-run`. Everything else — `node`, `npx`, `python3`, `sh`, `sed`, `curl`, `gh`,
-`docker`, `kubectl`, `awk`, `xargs`, `find`, `make`, `env` and the rest — is
-denied because it is not on the list.
+`--dry-run`. Six test runners are allowed under fail-closed flag
+allowlists: `pytest`; `go test` and `go vet`; `cargo test`, `check` and
+`clippy`; `make`; `node` test runners and scripts; and `python3`/`python`
+test modules and scripts. A flag not named in a runner's allowlist is
+refused with the flag in the reason, so `python3 -m` accepts only
+`unittest` and `pytest` (the attached `-munittest` form included), and
+`cargo --config`, `go -toolexec`, `make -E`, `node -p` and `pytest --pdb`
+are refused by construction. Everything else — `npx`, `sh`, `sed`,
+`curl`, `gh`, `docker`, `kubectl`, `awk`, `xargs`, `find`, `env` and the
+rest — is denied because it is not on the list.
 
 Fast-fail denials with specific reasons run on top: the `sudo` and `rm`
 families, network and archive tools, file mutators, `awk` and `xargs` are
@@ -74,30 +87,54 @@ outside their read-only flag allowlist; `rg` refuses `--pre` and
 `git submodule status`, `git stash list` and `git bisect log` are denied,
 because only the subcommands named above pass.
 
-The documented residual: `npm test` and `npm run <script>` execute whatever
-the project's package.json scripts contain. The guard inspects the npm
-invocation, not the script body, so package.json is trusted input. Beyond
-that, each allowlisted command is policed only where `tools/guards.ts`
-writes a rule — git's global and exec-channel options, `sort`'s and `uniq`'s
-flag allowlists, `rg`'s denied `--pre` flags, `bash`'s positional rule — so
-an option no rule names is passed through to the command itself.
+The documented residual: the acceptance commands execute whatever the
+project's test files, `conftest.py`, `Makefile`, configuration and scripts
+contain. The guard inspects the command line, not the code that command
+runs, so a test file or a build script is trusted input once its runner is
+allowed. Each runner is a fail-closed flag allowlist, so an option outside
+its list is refused rather than passed through; the other allowlisted
+commands are policed where `tools/guards.ts` writes a rule (git's global
+and exec-channel options, `sort`'s and `uniq`'s flag allowlists, `rg`'s
+denied `--pre` flags, `bash`'s positional rule). `wippa_verify` also reads
+the working diff before it spawns anything: when a changed file is part of
+the harness the command runs (a test file, `conftest.py`, `Makefile`,
+`package.json` or runner configuration), it returns `harness-modified`
+with the file list and refuses to run unless the caller passes
+`acknowledgeHarnessChanges: true`; if the diff cannot be read it reports
+`harnessCheck: "skipped"`. That check is a heuristic file match, not a
+sandbox.
+
+The guard matches each option as written. Five spellings still reach a
+program or configuration it cannot inspect: a git exec-channel option
+abbreviated (`--up` for `--upload-pack`); an npm option written with one dash
+or abbreviated (`-script-shell`, `--script`); a make command-line assignment
+with whitespace before `=` (`'MAKEFILES =file'`); a pytest `@argfile` used as
+an option value (`-k @file`); and a brace expression whose closing quote hides
+the closing brace, on hosts whose `/bin/sh` expands braces. These are open
+findings from the second security review and are not covered by the
+fail-closed claim.
 
 After the guard, the tool asserts a `verify` permission action with the
 command as its resource before spawning anything, so a deny rule for `verify`
 stops it exactly as the same rule stops `shell`. The guard is not a sandbox:
 an allowed command runs with the authority of the user running OpenCode —
-filesystem, processes, and network. A caller's `cwd` must not contain `..`
-segments, line breaks or null bytes, or it is refused with a stated reason
-before anything runs. The call is asynchronous, so it does not block the
-session, and cancelling the call kills the command. On POSIX the timeout
-kills the command's process group; on Windows it kills the shell, so a
-background process that holds the output open may still stall the call.
-Agent shell and edit rules, such as `rm -rf` or `sudo` denies, are
+filesystem, processes, and network. A caller's `cwd` must resolve inside the
+workspace and must not contain `..` segments, line breaks or null bytes, or it
+is refused with a stated reason before anything runs. The call is
+asynchronous, so it does not block the session, and cancelling the call kills
+the command. On POSIX the timeout kills the command's process group; on
+Windows it kills the shell, so a background process that holds the output
+open may still stall the call. Agent shell and edit rules, such as `rm -rf` or `sudo` denies, are
 literal-pattern guardrails, not a sandbox either.
 
 `wippa_diff` validates its `base` ref before handing it to git: absolute
 paths, `..` traversal, option-like `-…` input, and shell-significant
 characters are refused with a stated error.
+
+`wippa_plan_update` takes no path argument and writes exactly
+`<workspace>/.opencode/PLAN.md`. A symlink at that path or at the `.opencode`
+directory, dangling or not, is refused before the write, and the
+`plan_update` permission is asserted first.
 
 ## Token scope for the github MCP server
 

@@ -46,6 +46,7 @@ interface PermissionCall {
   agent?: string
   action: string
   resources: string[]
+  save?: string[]
   source?: { type: "tool"; messageID: string; id: string }
 }
 
@@ -175,6 +176,11 @@ function fakeHost(
   }
 }
 
+/** One fake working-diff entry, with the defaults a test usually needs. */
+function diffFile(file: string, status: DiffFile["status"] = "modified"): DiffFile {
+  return { file, patch: "", additions: 1, deletions: 0, status }
+}
+
 async function runTool(
   host: FakeHost,
   name: string,
@@ -242,10 +248,12 @@ test("setup registers the seven wippa tools in the wippa namespace", async () =>
     ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff", "plan_update"],
   )
   for (const tool of host.tools) {
+    const permission =
+      tool.name === "verify" ? "verify" : tool.name === "plan_update" ? "plan_update" : undefined
     const expected =
-      tool.name === "verify"
-        ? { namespace: "wippa", codemode: false, permission: "verify" }
-        : { namespace: "wippa", codemode: false }
+      permission === undefined
+        ? { namespace: "wippa", codemode: false }
+        : { namespace: "wippa", codemode: false, permission }
     assert.deepEqual(tool.options, expected)
     assert.equal(tool.input.type, "object")
     assert.ok(tool.description.length > 0, `${tool.name} carries a description`)
@@ -438,6 +446,36 @@ test("verify runs with a valid custom cwd resolved against the location", async 
   assert.equal(host.permissionCalls.length, 1)
 })
 
+test("verify refuses a cwd outside the workspace, including one reached through a symlink", async () => {
+  const { root } = probeFixture()
+  const outside = mkdtempSync(join(tmpdir(), "wippa-outside-"))
+  symlinkSync(outside, join(root, "escape-link"))
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const cwd of [outside, "escape-link"]) {
+    const result = JSON.parse(await runTool(host, "verify", { command: "pwd", cwd }))
+    assert.equal(result.ok, false, cwd)
+    assert.equal(result.exitCode, -1)
+    assert.equal(result.reason, "invalid-cwd")
+    assert.equal(result.stdout, "", "the command was refused before it spawned")
+    assert.match(result.stderr, /outside the workspace/)
+  }
+
+  // A sibling directory whose name extends the workspace path must not pass
+  // the separator check by string prefix alone.
+  const sibling = `${root}-sibling`
+  mkdirSync(sibling, { recursive: true })
+  const siblingResult = JSON.parse(
+    await runTool(host, "verify", { command: "pwd", cwd: sibling }),
+  )
+  assert.equal(siblingResult.ok, false)
+  assert.equal(siblingResult.reason, "invalid-cwd")
+
+  // The refusal is before the harness check: no working diff was read.
+  assert.equal(host.diffCalls.length, 0)
+})
+
 test("verify passes timeoutMs through to the command", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
@@ -502,14 +540,16 @@ test("verify propagates a denied permission instead of running the command", asy
   )
 })
 
-test("verify declares its own permission action and is the only tool that does", async () => {
+test("verify and plan_update declare their own permission actions and no other tool does", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
 
-  for (const tool of host.tools) {
-    if (tool.name === "verify") assert.equal(tool.options?.permission, "verify")
-    else assert.equal(tool.options?.permission, undefined, `${tool.name} declares no permission`)
+  const declared = new Map(host.tools.map((tool) => [tool.name, tool.options?.permission]))
+  assert.equal(declared.get("verify"), "verify")
+  assert.equal(declared.get("plan_update"), "plan_update")
+  for (const name of ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "diff"]) {
+    assert.equal(declared.get(name), undefined, `${name} declares no permission`)
   }
 
   // A read-only tool must not ask for a shell-shaped permission.
@@ -539,6 +579,111 @@ test("verify refuses commands the guard denies and never spawns them", async () 
   // while the words as tokens are denied — the guard scans every word.
   const harmless = JSON.parse(await runTool(host, "verify", { command: "echo wippa verify" }))
   assert.equal(harmless.ok, true)
+})
+
+test("verify refuses a harness the working diff modifies unless the caller acknowledges it", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  writeFileSync(
+    join(root, "harness-marker.cjs"),
+    "require('node:fs').writeFileSync('ran.txt', 'ran')\n",
+    "utf8",
+  )
+  host.setDiffFiles([
+    diffFile("harness-marker.cjs", "added"),
+    diffFile("src/a.ts"),
+    diffFile("package.json"),
+  ])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "node harness-marker.cjs" }))
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "harness-modified")
+  // The diff order is preserved, not re-sorted.
+  assert.deepEqual(result.harnessChanges, ["harness-marker.cjs", "package.json"])
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /harness-marker\.cjs, package\.json/)
+  assert.match(result.stderr, /acknowledgeHarnessChanges: true/)
+  assert.equal(result.durationMs, 0)
+  assert.equal(existsSync(join(root, "ran.txt")), false, "the refused command was not spawned")
+  // The permission assertion runs first; the harness check then reads the
+  // diff once and refuses without spawning.
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.diffCalls.length, 1)
+})
+
+test("verify runs a modified harness when the caller acknowledges it and reports the files", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  writeFileSync(
+    join(root, "harness-marker.cjs"),
+    "require('node:fs').writeFileSync('ran.txt', 'ran')\n",
+    "utf8",
+  )
+  host.setDiffFiles([
+    diffFile("harness-marker.cjs", "added"),
+    diffFile("src/a.ts"),
+    diffFile("package.json"),
+  ])
+  await setup(host.context)
+
+  const result = JSON.parse(
+    await runTool(host, "verify", {
+      command: "node harness-marker.cjs",
+      acknowledgeHarnessChanges: true,
+    }),
+  )
+
+  assert.equal(result.ok, true)
+  assert.equal(result.exitCode, 0)
+  assert.deepEqual(result.harnessChanges, ["harness-marker.cjs", "package.json"])
+  assert.equal(readFileSync(join(root, "ran.txt"), "utf8"), "ran")
+})
+
+test("verify runs normally when the working diff changes no harness", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("src/a.ts"), diffFile("README.md")])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "echo wippa-harness" }))
+
+  assert.equal(result.ok, true)
+  assert.equal(result.harnessChanges, undefined)
+  assert.equal(result.harnessCheck, undefined)
+  assert.equal(host.diffCalls.length, 1)
+})
+
+test("a failed working-diff read skips the harness check instead of blocking the run", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.failDiff("not a git repository")
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "echo wippa-harness" }))
+
+  assert.equal(result.ok, true)
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.harnessCheck, "skipped")
+  assert.equal(result.harnessChanges, undefined)
+})
+
+test("the permission assertion runs before the harness refusal", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("harness-marker.cjs", "added")])
+  host.denyPermission("denied by rule")
+  await setup(host.context)
+
+  await assert.rejects(
+    () => runTool(host, "verify", { command: "node harness-marker.cjs" }),
+    /denied by rule/,
+  )
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.diffCalls.length, 0, "the harness check never ran after the denial")
+  assert.equal(existsSync(join(root, "ran.txt")), false)
 })
 
 test("an unrelated agent in the global directory is not in the catalog", async () => {
@@ -698,9 +843,36 @@ test("plan_update writes .opencode/PLAN.md and returns bytes", async () => {
   const written = readFileSync(join(root, ".opencode", "PLAN.md"), "utf8")
   assert.equal(written, content)
 
+  // The write asserts its own permission, naming the fixed path.
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.permissionCalls[0]?.action, "plan_update")
+  assert.deepEqual(host.permissionCalls[0]?.resources, [".opencode/PLAN.md"])
+  assert.deepEqual(host.permissionCalls[0]?.save, [".opencode/PLAN.md"])
+
   const badResultJson = await runTool(host, "plan_update", { content: 123 })
   const badResult = JSON.parse(badResultJson)
   assert.equal(badResult.error, "content must be a string")
+  assert.equal(host.permissionCalls.length, 1, "invalid content is refused before the permission call")
+})
+
+test("a denied plan_update assertion prevents the write and leaves the ledger unchanged", async () => {
+  const { root } = probeFixture()
+  mkdirSync(join(root, ".opencode"), { recursive: true })
+  const plan = join(root, ".opencode", "PLAN.md")
+  writeFileSync(plan, "original plan\n", "utf8")
+
+  const host = fakeHost(root)
+  host.denyPermission("denied by rule")
+  await setup(host.context)
+
+  await assert.rejects(
+    () => runTool(host, "plan_update", { content: "# Replacement\n" }),
+    /denied by rule/,
+  )
+  assert.equal(readFileSync(plan, "utf8"), "original plan\n")
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.permissionCalls[0]?.action, "plan_update")
+  assert.deepEqual(host.permissionCalls[0]?.resources, [".opencode/PLAN.md"])
 })
 
 test("updatePlan refuses to write through a symbolic link", async () => {
@@ -752,6 +924,27 @@ test("updatePlan refuses to write through a dangling symbolic link", async () =>
     error: "refusing to write to a symbolic link at .opencode/PLAN.md",
   })
   assert.equal(existsSync(target), false)
+})
+
+test("updatePlan refuses a .opencode directory that is a symbolic link", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const outside = mkdtempSync(join(tmpdir(), "wippa-plan-outside-"))
+  symlinkSync(outside, join(root, ".opencode"))
+
+  const resultJson = await runTool(host, "plan_update", { content: "# Malicious plan\n" })
+  assert.deepEqual(JSON.parse(resultJson), {
+    error: "refusing to write through a symbolic link at .opencode",
+  })
+  assert.equal(existsSync(join(outside, "PLAN.md")), false, "the outside directory stayed untouched")
+
+  const directResult = updatePlan(root, "# Direct overwrite\n")
+  assert.deepEqual(directResult, {
+    error: "refusing to write through a symbolic link at .opencode",
+  })
+  assert.equal(existsSync(join(outside, "PLAN.md")), false)
 })
 
 test("editing the roster invalidates the cached catalog", async () => {

@@ -1,6 +1,16 @@
 import { spawn } from "node:child_process"
-import { lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
-import { join, resolve } from "node:path"
+import {
+  closeSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
+import { join, resolve, sep } from "node:path"
 
 import {
   categorySlug,
@@ -321,12 +331,20 @@ export interface VerifyResult {
   ok: boolean
   /**
    * Why the command produced no normal exit code: `invalid-command`,
-   * `invalid-cwd`, `denied-pattern`, `aborted`, `timeout`, `output-limit`,
-   * `spawn-error` or `cwd-not-found`. Absent when the command ran to a
-   * verdict, including a non-zero exit code, which is reported through
-   * `exitCode`.
+   * `invalid-cwd`, `denied-pattern`, `harness-modified`, `aborted`, `timeout`,
+   * `output-limit`, `spawn-error` or `cwd-not-found`. Absent when the command
+   * ran to a verdict, including a non-zero exit code, which is reported
+   * through `exitCode`.
    */
   reason?: string
+  /**
+   * The working-diff files the acceptance command runs as a harness, when any
+   * were modified. Present on a `harness-modified` refusal and on a run the
+   * caller acknowledged with `acknowledgeHarnessChanges: true`.
+   */
+  harnessChanges?: string[]
+  /** `skipped` when the harness check could not read the working diff. */
+  harnessCheck?: "skipped"
   stdout: string
   stderr: string
   /** The absolute working directory the command ran in. */
@@ -579,12 +597,49 @@ export function updatePlan(
 ): { ok: boolean; path: string; bytes: number } | { error: string } {
   try {
     const dir = join(location, ".opencode")
+    // A symlinked `.opencode` directory redirects the write outside the
+    // workspace, so it is refused before `mkdirSync` can follow it. A
+    // dangling link is refused the same way: the write would create its
+    // target elsewhere.
+    if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return { error: "refusing to write through a symbolic link at .opencode" }
+    }
     mkdirSync(dir, { recursive: true })
+    // `location` may itself sit behind a link, and a link can be swapped in
+    // between the lstat and the mkdir. Canonicalising both sides catches
+    // either: the directory that now exists must resolve inside the
+    // canonical workspace.
+    const rootReal = realpathSync(location)
+    const dirReal = realpathSync(dir)
+    if (dirReal !== rootReal && !dirReal.startsWith(`${rootReal}${sep}`)) {
+      return { error: "refusing to write outside the workspace at .opencode" }
+    }
     const planPath = join(dir, "PLAN.md")
     if (lstatSync(planPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
       return { error: "refusing to write to a symbolic link at .opencode/PLAN.md" }
     }
-    writeFileSync(planPath, content, "utf8")
+    // O_NOFOLLOW closes the window between the lstat above and the open: a
+    // symbolic link swapped in at PLAN.md is refused by the kernel (ELOOP)
+    // rather than followed. It is a POSIX flag; where the platform does not
+    // define it the lstat is the whole defence, and that TOCTOU remains. The
+    // parent directory is not protected the same way — a swap of `.opencode`
+    // itself between the realpath check and the open would still be followed,
+    // because Node has no openat-relative-to-a-directory-fd call — so that
+    // narrower race is reported here rather than claimed closed.
+    const flags =
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0)
+    let descriptor: number | undefined
+    try {
+      descriptor = openSync(planPath, flags, 0o644)
+      writeFileSync(descriptor, content, "utf8")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+        return { error: "refusing to write to a symbolic link at .opencode/PLAN.md" }
+      }
+      throw error
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor)
+    }
     return {
       ok: true,
       path: ".opencode/PLAN.md",

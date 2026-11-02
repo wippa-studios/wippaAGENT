@@ -9,21 +9,36 @@ below.
 
 ### Changed
 
-- Changed: delegation briefs now mandate role framing and topic playbook bindings for broad specialists, giving category agents narrow domain expertise during execution.
+- Delegation briefs now mandate role framing and topic playbook bindings for broad specialists, giving category agents narrow domain expertise during execution.
+- The six runner commands in `wippa_verify` are now fail-closed flag allowlists: a flag not named in a runner's allowlist is refused, with the flag named in the reason.
+- `wippa_verify` now reads the working diff before it spawns anything and refuses to run when the test file, `conftest.py`, `Makefile`, `package.json` or runner configuration is modified, unless the caller passes `acknowledgeHarnessChanges: true`; it reports `harnessCheck: "skipped"` when the diff cannot be read.
+- The README now describes the single plan-ledger write and the harness gate throughout, and the coverage tables in `README.md` and `evals/README.md` record the evidence that exists rather than claiming a measured effect.
 
 ### Added
 
-- Added: expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with published outcomes tables in `README.md` and `evals/README.md`.
+- Expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with coverage tables in `README.md` and `evals/README.md`.
 - `wippa_verify` now supports polyglot acceptance commands: `pytest`,
   `go test` and `go vet`, `cargo test`, `cargo check` and `cargo clippy`,
   `make`, `node` test runners and scripts, and `python3`/`python` test
   modules and scripts, guarded by per-command restrictions against
   external program execution, directory escape, interactive debuggers and
   eval flags.
-- `wippa_plan_update` tool in the plugin: writes directly and exclusively to
-  `.opencode/PLAN.md` within the workspace, refusing symlinks and eliminating
-  child agent hops for session plan updates while preserving edit denial on
-  repository source code.
+- `wippa_plan_update` tool in the plugin: it writes exactly
+  `.opencode/PLAN.md`, takes no path argument, refuses a symlink at that path
+  (dangling or not), and asserts its own `plan_update` permission, eliminating
+  child agent hops for session plan updates while edit stays denied on every
+  file except the ledger.
+- `wippa_plan_update` is behind a `plan_update` permission asserted before the
+  write; `wippaAGENT` is the only agent that declares it.
+- `README.md` documents the specialist playbooks: 175 reference files across 11
+  folders, their on-demand token treatment, and the procedure for adding one.
+
+### Fixed
+
+- Closed the first-round guard escapes: unquoted backslashes and glob expansion, dash-leading option values, make command-line variable assignments, positional pytest `@argfile`, a symlinked `.opencode` directory, out-of-workspace `cwd`, and exact npm script-shell options. Five residual spellings remain open after the second review: git and npm option abbreviations, make assignments with whitespace before `=`, pytest argfiles in option values, and quoted-brace expansion.
+- `python3 -m` in `wippa_verify` accepts only `unittest` and `pytest`,
+  including the attached `-munittest` form, and `cargo --config`, `-Z` and
+  `--manifest-path` are refused.
 
 ## [1.1.0] - 2026-11-01
 

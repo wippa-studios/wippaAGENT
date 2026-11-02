@@ -1,4 +1,5 @@
-import { resolve } from "node:path"
+import { realpathSync } from "node:fs"
+import { resolve, sep } from "node:path"
 
 import type { Plugin } from "@opencode/plugin"
 
@@ -23,6 +24,7 @@ import {
   type VerifyResult,
 } from "./operations.ts"
 import { guardVerifyCommand, validateDiffBase, validateVerifyCwd } from "./guards.ts"
+import { harnessFiles } from "./harness.ts"
 
 /**
  * The plugin contract of `@opencode/plugin`.
@@ -126,6 +128,30 @@ function coerceBounded(value: unknown, fallback: number, min: number, max: numbe
   const number = typeof value === "number" ? value : Number.NaN
   if (!Number.isFinite(number)) return fallback
   return Math.min(max, Math.max(min, Math.floor(number)))
+}
+
+/**
+ * The reason a resolved working directory is not inside the workspace, or
+ * undefined when it is. Both paths are canonicalised, so a `..` that survived
+ * resolution, a symlink inside the workspace pointing out of it, and a
+ * sibling directory named with a shared prefix (`/repo-other` against
+ * `/repo`) all fail the same check. A path that cannot be resolved does not
+ * exist or has a broken parent link, and is refused for the same reason: the
+ * containment cannot be proved.
+ */
+function workspaceCwdRefusal(location: string, workingDir: string): string | undefined {
+  let root: string
+  let target: string
+  try {
+    root = realpathSync(location)
+    target = realpathSync(workingDir)
+  } catch {
+    return `the working directory could not be resolved: ${workingDir}`
+  }
+  if (target === root) return undefined
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`
+  if (target.startsWith(prefix)) return undefined
+  return `the working directory is outside the workspace: ${target} is not inside ${root}`
 }
 
 const plugin: Plugin.Plugin = {
@@ -236,7 +262,8 @@ const plugin: Plugin.Plugin = {
 
       editor.add({
         name: "verify",
-        description: "Run an acceptance command and report the real exit code, so a pass/fail verdict never rests on subagent prose.",
+        description:
+          "Run an acceptance command and report the real exit code, so a pass/fail verdict never rests on subagent prose. The working directory must resolve inside the workspace. The command guard and the harness-acknowledgement check are policy gates, not a sandbox.",
         input: {
           type: "object",
           properties: {
@@ -246,11 +273,17 @@ const plugin: Plugin.Plugin = {
             },
             cwd: {
               type: "string",
-              description: "The working directory to run the acceptance command in. Defaults to the current directory.",
+              description:
+                "The working directory to run the acceptance command in. Must resolve to a directory inside the workspace; defaults to the workspace root.",
             },
             timeoutMs: {
               type: "number",
               description: "Milliseconds before the command is killed. Defaults to 300000; clamped to 1000..3600000.",
+            },
+            acknowledgeHarnessChanges: {
+              type: "boolean",
+              description:
+                "Run even when the working diff changes a harness the command runs (a test file, runner configuration or script). Defaults to false.",
             },
           },
           required: ["command"],
@@ -259,10 +292,11 @@ const plugin: Plugin.Plugin = {
         options: { namespace: "wippa", codemode: false, permission: "verify" },
         execute: async (input, context) => {
           await context.progress({ status: "verify" })
-          const { command, cwd, timeoutMs } = input as {
+          const { command, cwd, timeoutMs, acknowledgeHarnessChanges } = input as {
             command?: unknown
             cwd?: unknown
             timeoutMs?: unknown
+            acknowledgeHarnessChanges?: unknown
           }
           const location = resolve(ctx.location.directory)
           if (
@@ -334,6 +368,61 @@ const plugin: Plugin.Plugin = {
           // The default is the location directory, not the server process cwd,
           // and a relative cwd is resolved against it.
           const workingDir = typeof cwd === "string" && cwd.trim() ? resolve(location, cwd) : location
+          // The resolved directory must canonicalise inside the workspace.
+          // Without this a caller could run an acceptance command in another
+          // checkout, where the harness check reads no diff and the guard's
+          // relative paths mean something else entirely.
+          const cwdRefusal = workspaceCwdRefusal(location, workingDir)
+          if (cwdRefusal !== undefined) {
+            const refusal: VerifyResult = {
+              command,
+              exitCode: -1,
+              ok: false,
+              reason: "invalid-cwd",
+              stdout: "",
+              stderr: `The working directory was refused: ${cwdRefusal}.`,
+              cwd: workingDir,
+              durationMs: 0,
+            }
+            return { content: JSON.stringify(refusal) }
+          }
+          // The harness check reads the working diff, then compares its file
+          // names against what this command runs. It runs after the permission
+          // assertion and before any spawn, so refusing a modified harness
+          // stops the command outright. The check is a policy gate, not a
+          // sandbox: it sees file names, not their contents, and an
+          // acknowledged harness still runs with the user's authority.
+          let harnessChanges: string[] = []
+          let harnessCheck: "skipped" | undefined
+          try {
+            const workingDiff = await ctx.vcs.diff(
+              { mode: "working" },
+              { signal: context.signal },
+            )
+            harnessChanges = harnessFiles(
+              command,
+              workingDiff.data.map((file) => file.file),
+            )
+          } catch {
+            // A VCS failure is not a reason to block a run the caller could
+            // already perform with the diff tool; the result says the check
+            // was skipped rather than pretending it passed.
+            harnessCheck = "skipped"
+          }
+          if (harnessChanges.length > 0 && acknowledgeHarnessChanges !== true) {
+            const refusal: VerifyResult = {
+              command,
+              exitCode: -1,
+              ok: false,
+              reason: "harness-modified",
+              harnessChanges,
+              stdout: "",
+              stderr: `the acceptance command runs a harness this diff modifies: ${harnessChanges.join(", ")}; pass acknowledgeHarnessChanges: true to run it`,
+              cwd: workingDir,
+              durationMs: 0,
+            }
+            return { content: JSON.stringify(refusal) }
+          }
           const options: VerifyOptions = { command, cwd: workingDir, signal: context.signal }
           // A non-finite value is not a timeout: the default applies instead.
           // The bounds clamp inside verify.
@@ -341,7 +430,16 @@ const plugin: Plugin.Plugin = {
             options.timeoutMs = timeoutMs
           }
           const result = await verify(options)
-          return { content: JSON.stringify(result) }
+          // Carry the harness verdict alongside the run it describes. An empty
+          // list is not reported; `skipped` is, because the caller should know
+          // the check did not run.
+          const report: VerifyResult =
+            harnessChanges.length > 0
+              ? { ...result, harnessChanges }
+              : harnessCheck === "skipped"
+                ? { ...result, harnessCheck }
+                : result
+          return { content: JSON.stringify(report) }
         },
       })
 
@@ -431,7 +529,7 @@ const plugin: Plugin.Plugin = {
       editor.add({
         name: "plan_update",
         description:
-          "Write or update the session plan ledger at .opencode/PLAN.md. Only writes to that exact file within the workspace; rejects any attempt to write elsewhere.",
+          "Write the session plan ledger to the fixed path .opencode/PLAN.md. The only input is content; the path is not caller-selectable, and a symbolic link at .opencode or at .opencode/PLAN.md (dangling or not) is refused.",
         input: {
           type: "object",
           properties: {
@@ -443,13 +541,24 @@ const plugin: Plugin.Plugin = {
           required: ["content"],
           additionalProperties: false,
         },
-        options: { namespace: "wippa", codemode: false },
+        options: { namespace: "wippa", codemode: false, permission: "plan_update" },
         execute: async (input, context) => {
           await context.progress({ status: "plan_update" })
           const { content } = input as { content?: unknown }
           if (typeof content !== "string") {
             return { content: JSON.stringify({ error: "content must be a string" }) }
           }
+          // The plan ledger is a write, so it asserts its own permission
+          // before touching the file. A rejection propagates rather than
+          // becoming output, so the model sees the denial.
+          await ctx.permission.assert({
+            sessionID: context.sessionID,
+            agent: context.agent,
+            source: { type: "tool", messageID: context.messageID, id: context.id },
+            action: "plan_update",
+            resources: [".opencode/PLAN.md"],
+            save: [".opencode/PLAN.md"],
+          })
           const location = resolve(ctx.location.directory)
           const result = updatePlan(location, content)
           return { content: JSON.stringify(result) }
