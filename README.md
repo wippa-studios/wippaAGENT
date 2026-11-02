@@ -148,6 +148,29 @@ The table lists the eight scenarios on files at commit `332a726`. Scenario files
 
 Scenarios 03 to 08 have no acceptance command, so in a live run their verdict is a report-term match (or, for 03, the acceptance criteria) and they do not exercise the exit-code guarantee. Scenarios 01 and 02 run this repository's own `npm test`, so they prove the command surface works, not the routed agent's behaviour.
 
+### When it fits
+
+The setup pays for itself when three things are true: a command can decide when the work is done, the change crosses more than one specialty, and a wrong change costs more than the extra model calls.
+
+**Good fits**
+
+- Polyglot repositories with real test commands: `pytest` for a Python service, `npm test` for a TypeScript frontend, `go test -race` for a Go service, `cargo test` and `cargo clippy` for a Rust CLI. The six runner allowlists and the language playbooks are built for this.
+- Test-backed refactors and legacy modernisation, where the existing suite is the safety net and a change to the tests has to be visible to the reviewer.
+- Security-sensitive work — authentication, payments, personal data, permission models — where the High-risk chain, the security review and the ledger trail are worth the overhead.
+- Small-team pull-request work through the GitHub server: issues, review comments and CI status without giving the orchestrator a shell.
+- Frontend work verified in a browser through the Playwright server, with the caveat that the acceptance command is still one of the allowed runners.
+- Documentation-heavy repositories with a claims or test check, and teams standardising how several people use agents on one repository.
+
+**Weak fits**
+
+- One-file fixes and typos: a single agent with edit and a test command is cheaper; the Trivial tier exists, but the orchestration is overhead at that size.
+- Exploratory research or design with no acceptance command: the exit-code guarantee does not apply, and the eval scenarios that report rather than execute say so.
+- Infrastructure-as-code whose check is `terraform plan`, `kubectl diff`, `helm`, `ansible` or `docker`: those commands are outside the verify allowlist until you add them to `tools/guards.ts`.
+- Work whose acceptance path needs package installs or cloud CLIs (`npm install`, `pip install`, `gh`): subagents can run them, but the orchestrator's verdict cannot.
+- Latency- or cost-sensitive bulk edits, and interactive REPL debugging: the review loop costs more than the work.
+
+The practical test is the first paragraph: if you can name the command that must exit 0 and the diff crosses more than one domain, it fits. If you cannot name the command, treat it as research and use the roster for expertise, not for the exit-code guarantee.
+
 <br/>
 
 ## Architecture
