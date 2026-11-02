@@ -33,7 +33,7 @@ the same routing and the same review discipline.
 [![CI](https://img.shields.io/github/actions/workflow/status/wippa-studios/wippaAGENT/ci.yml?style=for-the-badge&label=CI)](https://github.com/wippa-studios/wippaAGENT/actions/workflows/ci.yml)
 ![Agents](https://img.shields.io/badge/agents-13-6366f1?style=for-the-badge)
 ![MCP Servers](https://img.shields.io/badge/MCP%20servers-3-0ea5e9?style=for-the-badge)
-![Tools](https://img.shields.io/badge/tools-7-f59e0b?style=for-the-badge)
+![Tools](https://img.shields.io/badge/tools-8-f59e0b?style=for-the-badge)
 
 [![Best of Agent Harnesses](https://img.shields.io/badge/%F0%9F%8F%86_Best_of-Agent_Harnesses-5ac4bf)](https://github.com/RyanAlberts/best-of-Agent-Harnesses)
 [![Listed on awesome-software-factories](https://img.shields.io/badge/listed%20on-awesome--software--factories-blue)](https://github.com/varun1505/awesome-software-factories)
@@ -58,11 +58,11 @@ the same routing and the same review discipline.
     <td align="center" width="25%"><h2>1</h2><b>Primary agent</b><br/><sub>Plans, delegates, verifies</sub></td>
     <td align="center" width="25%"><h2>12</h2><b>Subagents</b><br/><sub>Implementation and review</sub></td>
     <td align="center" width="25%"><h2>3</h2><b>MCP servers</b><br/><sub>GitHub, docs, browser</sub></td>
-    <td align="center" width="25%"><h2>7</h2><b>Plugin tools</b><br/><sub>Roster lookup, verification, diff reading and wippa_plan_update</sub></td>
+    <td align="center" width="25%"><h2>8</h2><b>Plugin tools</b><br/><sub>Roster lookup, session continuation, verification, diff reading and wippa_plan_update</sub></td>
   </tr>
 </table>
 
-wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup, an acceptance verifier, diff reading and the `wippa_plan_update` plan-ledger write.
+wippaAGENT is a complete OpenCode setup. One primary orchestrator reads the request, plans the work and delegates it. Twelve specialist subagents do the implementation and the review. Three MCP servers give those agents access to GitHub, library documentation and browser automation. A bundled plugin adds roster lookup, subagent session continuation, an acceptance verifier, diff reading and the `wippa_plan_update` plan-ledger write.
 
 <br/>
 
@@ -287,7 +287,7 @@ The review loop runs at most **two iterations** per piece of work. After the sec
 
 **The plan ledger** lives on disk at `.opencode/PLAN.md` in the working directory. It holds the agreed plan, the decisions made (including tier calls and tie-break routings), the work items in flight and completed, and the open risks. Every item names its owner subagent and its acceptance criterion.
 
-The orchestrator calls `wippa_plan_update` with the full markdown for the ledger. The tool takes no path argument and writes `<workspace>/.opencode/PLAN.md` and nothing else; it refuses a symlink at that path or at the `.opencode` directory, dangling or not, and asserts its own `plan_update` permission before it writes. The next session reads the ledger first, and where the ledger and the repository disagree, **the repository is the truth**.
+The orchestrator calls `wippa_plan_update` with the full markdown for the ledger. The tool takes no path argument and writes `<workspace>/.opencode/PLAN.md` and nothing else; it refuses a symlink at that path or at the `.opencode` directory, dangling or not, or a hard link at that path, and asserts its own `plan_update` permission before it writes. The next session reads the ledger first, and where the ledger and the repository disagree, **the repository is the truth**.
 
 **The return contract.** Every subagent returns the same fixed schema in its final message:
 
@@ -333,7 +333,7 @@ Permissions are enforced by OpenCode rules, not by prompts. This section is expl
 | Guarantee | Mechanism | Strength |
 |-----------|-----------|----------|
 | The orchestrator cannot edit repository files or run a shell | `edit` and `shell` denied in its frontmatter | **Enforced** by OpenCode permissions |
-| The orchestrator writes exactly one file | `wippa_plan_update` takes no path argument, writes only `<workspace>/.opencode/PLAN.md`, refuses a symlink at that path or at the `.opencode` directory (dangling or not), and asserts the `plan_update` permission before it writes | **Enforced** |
+| The orchestrator writes exactly one file | `wippa_plan_update` takes no path argument, writes only `<workspace>/.opencode/PLAN.md`, refuses a symlink at that path or at the `.opencode` directory (dangling or not), or a hard link at that path, and asserts the `plan_update` permission before it writes | **Enforced** |
 | The only command the orchestrator can trigger is the acceptance command | `wippa_verify`, behind its own `verify` permission and a pre-spawn guard | **Enforced**, with a documented residual (below) |
 | A modified test harness is not run without acknowledgement | `wippa_verify` reads the working diff before spawning; a changed test file, `conftest.py`, `Makefile`, `package.json` or runner configuration, including `.cargo/config.toml`, `Cargo.lock` and `go.mod`, returns `harness-modified` with the `harnessChanges` file list and runs only with `acknowledgeHarnessChanges: true`; a diff that cannot be read reports `harnessCheck: "skipped"` | **Enforced** (heuristic file match); treating a harness change as High-risk is a **Convention** |
 | Reviewers cannot fix their own findings | `edit` denied for `quality-auditor` and `security-reviewer` | **Enforced** |
@@ -377,7 +377,7 @@ The six test runners below (`pytest`, `go`, `cargo`, `make`, `node` and `python3
 
 | Command | What is allowed |
 |---------|-----------------|
-| `npm` | Only `test`, `run` and `ls`. The subcommand must come immediately after `npm`, and any option in that position fails closed, so `npm pkg set`, `npm config set` and `npm --yes exec` are refused. Options that select another shell or config are refused: `--script-shell`, `--shell`, `--prefix`, `--userconfig` and `--globalconfig` (exact spellings; single-dash and abbreviated spellings are a known gap). |
+| `npm` | Only `test`, `run` and `ls`. The subcommand must come immediately after `npm`, and any option in that position fails closed, so `npm pkg set`, `npm config set` and `npm --yes exec` are refused. Options that select another shell or config are refused: `--script-shell`, `--shell`, `--prefix`, `--userconfig` and `--globalconfig`. |
 | `pytest` | Test execution with positional paths and `-k` values (e.g. `pytest`, `pytest tests/`, `pytest -k unit`). `--pdb`, `--trace`, `-p`, `-c` and `-o` are refused. |
 | `go` | Only `test` and `vet` subcommands (e.g. `go test -v ./...`, `go vet ./...`). Positional packages pass. `-exec`, `-toolexec` and `-vettool` are refused. |
 | `cargo` | Only `test`, `check` and `clippy` subcommands (e.g. `cargo test`, `cargo check`, `cargo clippy`). `--config`, `-Z` and `--manifest-path` are refused. |
@@ -415,10 +415,10 @@ Each is refused with a reason.
 </details>
 
 > [!IMPORTANT]
-> **Documented residual.** The acceptance commands execute whatever the project's test files, `conftest.py`, `Makefile`, `package.json`, runner configuration (including `.cargo/config.toml`, `Cargo.lock` and `go.mod`) and scripts contain; the guard inspects the command line, not the code that command runs. Each runner is a fail-closed flag allowlist, so an option outside its list is refused rather than passed through, and the character policy and command allowlist still apply. What remains outside the guard is the harness itself: `wippa_verify` lists the harness files when the working diff touches them and refuses to run until the caller acknowledges the change. Treat a harness change as High-risk work. An allowed command still runs with the authority of the user running OpenCode.
+> **Documented residual.** The acceptance commands execute whatever the project's test files, `conftest.py`, `Makefile`, `package.json`, runner configuration (including `.cargo/config.toml`, `Cargo.lock` and `go.mod`) and scripts contain; the guard inspects the command line, not the code that command runs. Each runner is a fail-closed flag allowlist, so an option outside its list is refused rather than passed through, and the character policy and command allowlist still apply. A further residual is the harness itself: `wippa_verify` lists the harness files when the working diff touches them and refuses to run until the caller acknowledges the change. Treat a harness change as High-risk work. An allowed command still runs with the authority of the user running OpenCode.
 
-> [!WARNING]
-> **Known gaps in the guard.** The guard matches each option as written, and five spellings still reach a program or configuration it cannot inspect: a git exec-channel option abbreviated (`--up` for `--upload-pack`); an npm option written with one dash or abbreviated (`-script-shell`, `--script`); a make command-line assignment with whitespace before `=` (`'MAKEFILES =file'`); a pytest `@argfile` used as an option value (`-k @file`); and a brace expression whose closing brace is quoted, on hosts whose `/bin/sh` expands braces. These are open findings from the second security review, not covered by the fail-closed claim.
+> [!NOTE]
+> **What the harness check does not see.** The check compares the file names in the working diff against what the command runs, so it cannot see a path named on the command line that lives outside the repository, a harness committed before the working diff, an included makefile without a `.mk` suffix, or a custom unittest `-p` pattern. It is a policy gate, not a sandbox.
 
 ### How `wippa_diff` is guarded
 
@@ -428,7 +428,7 @@ Each is refused with a reason.
 
 | Agent | edit | shell | verify | everything else |
 |-------|------|-------|--------|-----------------|
-| `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` allowed |
+| `wippaAGENT` | denied | denied | `rm -rf *`, `sudo *`, `git push --force *` denied | `subagent *` and `subagent_continue *` allowed |
 | `core-developer`, `language-specialist`, `infrastructure-engineer`, `data-engineer`, `developer-experience`, `domain-specialist` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `quality-auditor` | denied | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
 | `debugger` | allowed | allowed | `rm -rf *` and `sudo *` denied | `rm -rf *` and `sudo *` denied |
@@ -436,7 +436,7 @@ Each is refused with a reason.
 | `orchestration-lead` | allowed | allowed | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied | `rm -rf *`, `git push --force *` and `npm install *` ask; `sudo *` denied |
 | `research-analyst`, `product-strategist` | allowed | deny all shell | deny all verify | no additional deny rules; read, web and MCP tools remain reachable |
 
-`wippaAGENT` alone declares `plan_update`; the subagents do not use the plan tool.
+`wippaAGENT` alone declares both `plan_update` and `subagent_continue`; the subagents declare neither.
 
 ### MCP reach
 
@@ -449,9 +449,9 @@ No rule restricts MCP reach per agent: every agent can reach the `github`, `cont
 
 ## Tools and MCP servers
 
-### The seven plugin tools
+### The eight plugin tools
 
-The bundled plugin adds seven tools: four for finding and reading the roster, one for checking work, one for reading a diff, and one for updating the session plan ledger.
+The bundled plugin adds eight tools: four for finding and reading the roster, one for continuing the latest session of a named subagent, one for checking work, one for reading a diff, and one for updating the session plan ledger.
 
 | Tool | Question it answers |
 |------|---------------------|
@@ -459,9 +459,10 @@ The bundled plugin adds seven tools: four for finding and reading the roster, on
 | `wippa_subagent_get` | What exactly does one agent do? Full definition, prompt and permissions. |
 | `wippa_subagent_list` | What is available at all, organised by category? |
 | `wippa_subagent_invalid` | Is the cached catalog stale? Clears the cache so the next read is fresh. |
+| `wippa_subagent_continue` | How do I resume the work of a subagent without naming a session? Continues the newest child session of the named subagent under the current session: it takes no session id, parent id or path, asserts the `subagent_continue` permission before listing anything, and returns the session id as output only. |
 | `wippa_verify` | Did the acceptance command pass? Runs it asynchronously with a timeout, capped output and cancellation, and returns the real exit code with stdout, stderr and how long it ran, so a pass/fail verdict never rests on prose. Runs `npm test/run`, `pytest`, `go test/vet`, `cargo test/check/clippy`, `make`, `node --test` and scripts, and `python3 -m unittest` or `python3 -m pytest`. Each runner accepts only its allowlisted flags, and a modified harness is refused until the caller acknowledges it. Commands outside the [guard](#how-wippa_verify-is-guarded) never run. |
 | `wippa_diff` | What changed? Returns the working, branch or committed diff as structured per-file entries (patch, additions, deletions, status), so the orchestrator can read the diff itself without a shell. |
-| `wippa_plan_update` | How to record decisions and progress without child agent hops? Writes exactly `<workspace>/.opencode/PLAN.md`: it takes no path argument and writes no other file, refuses a symlink at that path or at the `.opencode` directory (dangling or not), and asserts the `plan_update` permission before the write. |
+| `wippa_plan_update` | How to record decisions and progress without child agent hops? Writes exactly `<workspace>/.opencode/PLAN.md`: it takes no path argument and writes no other file, refuses a symlink at that path or at the `.opencode` directory (dangling or not), or a hard link at that path, and asserts the `plan_update` permission before the write. |
 
 **What the catalog contains.** The catalog is the roster: the twelve agents this bundle ships, plus any id listed in `WIPPA_CUSTOM_AGENT_IDS`. From the global agent directory, where every project's agents live together, only those ids are indexed, so an unrelated agent installed for another project does not appear in a search or inflate a list. A project directory, a `WIPPA_AGENT_DIR` override and the bundle's own tree are indexed in full.
 
@@ -702,6 +703,16 @@ The prompt corpus (the primary agent plus the twelve subagents) is budgeted at *
 | Always-on skill listing | **1,250** estimated tokens | Skill bodies load only when called, but OpenCode advertises each skill's id, name and description at every model step |
 
 `node scripts/token-count.mjs` prints both totals, counting each skill as the listing template emits it, markup included. Around the list OpenCode emits a fixed prologue and an `<available_skills>` wrapper, about **110 estimated tokens**, reported separately by the script. The full always-on skill surface today is about **1,181 estimated tokens**.
+
+### OpenCode memory
+
+The session database grows with conversation history. On this machine `opencode.db` measured **888 MB** when this section was written, while `snapshot/` was empty, so deleting snapshots alone does not reclaim the space. The log measured 27 MB and the WAL 14 MB.
+
+`npm run opencode` launches the CLI through `scripts/opencode.sh`. The wrapper does not assume a V8 runtime: `WIPPA_OPENCODE_RUNTIME` accepts `auto` (the default), `node` or `bun`. With `node` it appends `--max-old-space-size=2048` to `NODE_OPTIONS` before `exec` unless a heap flag is already present, and `WIPPA_OPENCODE_HEAP_MB` changes the cap between 256 and 8192. With `bun` it leaves `NODE_OPTIONS` alone and prints one line saying the shipped Bun binary ignores the V8 flag; `WIPPA_OPENCODE_ADDRESS_SPACE_MB` opts into a hard `ulimit -v` address-space limit in MiB, and a low value can abort the process. `auto` reads the first line of the launcher for `node` or `bun`, and for an ELF binary treats a `Bun v` string as bun, defaulting to bun with a warning when the heuristic does not match. A leading `--wrapper-help` is consumed by the wrapper; `--help` and `-h` are passed through to OpenCode.
+
+`npm run clean:opencode` runs `scripts/opencode-memory.sh`. It is a read-only report by default: the data directory, the database, WAL, log and snapshot sizes, and what `--apply` and `--vacuum` would do. A dry run works while OpenCode is running. `--apply` prunes the contents of `snapshot/` and rotates `log/opencode.log` to `log/opencode.log.1`, but refuses while an opencode process is running because that process holds the log descriptor and snapshots are revert points. `--vacuum` does both, then takes a consistent SQLite backup of the database with `.backup` to `opencode.db.bak-<YYYYmmddHHMMSS>.XXXXXX`, created exclusively with `mktemp` at mode 600, and runs `wal_checkpoint(TRUNCATE)` followed by `VACUUM`; it requires `--yes`. The process check asks `fuser` whether any process holds `opencode.db`; where `fuser` is unavailable it falls back to `pgrep -x opencode`, which matches only that exact process name and can miss a differently named launcher. An unreadable data path, such as a snapshot directory that cannot be listed, fails the report with a stated reason instead of printing zero.
+
+The data directory is resolved from `OPENCODE_DATA_DIR`, then `$XDG_DATA_HOME/opencode`, then `~/.local/share/opencode` (`~/Library/Application Support/opencode` on macOS). Never delete `opencode.db` directly. The vacuum path prints the backup location, and the script never removes the database or a backup.
 
 ### Specialist playbooks
 

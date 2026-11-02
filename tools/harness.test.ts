@@ -43,6 +43,10 @@ test("npm commands treat the manifest, lockfiles and tests as harness", () => {
   ])
 })
 
+test("npm commands treat .npmrc as harness", () => {
+  assertHarness("npm test", [".npmrc", "package.json", "src/a.ts"], [".npmrc", "package.json"])
+})
+
 test("pytest commands treat its configuration and Python test files as harness", () => {
   const files = [
     "conftest.py",

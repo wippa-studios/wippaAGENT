@@ -1,5 +1,14 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -64,7 +73,40 @@ interface FakeContext {
       options?: { signal?: AbortSignal },
     ): Promise<{ location: { directory: string }; data: readonly DiffFile[] }>
   }
+  session: {
+    list(
+      input: SessionListCall,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ data: FakeSession[]; cursor: Record<string, never> }>
+    prompt(
+      input: SessionPromptCall,
+      options?: { signal?: AbortSignal },
+    ): Promise<{ id: string }>
+  }
   tool: { transform(callback: (editor: FakeEditor) => void): Promise<void> }
+}
+
+/** The child-session record the continuation lookup reads. */
+interface FakeSession {
+  id: string
+  parentID?: string
+  agent?: string
+  time: {
+    created: number
+    updated: number
+    archived?: number
+  }
+}
+
+interface SessionListCall {
+  parentID?: string | null
+  order?: "asc" | "desc"
+  archived?: boolean
+}
+
+interface SessionPromptCall {
+  sessionID: string
+  text: string
 }
 
 // The real `ctx.vcs.diff` input: the location comes from the plugin instance,
@@ -99,6 +141,12 @@ interface FakeHost {
   setDiffFiles(files: readonly DiffFile[]): void
   /** Make diff calls reject, the way a failing git command does. */
   failDiff(message: string): void
+  /** Every `session.list` call the plugin made, in order, with its signal. */
+  sessionListCalls: (SessionListCall & { signal?: AbortSignal })[]
+  /** Every `session.prompt` call the plugin made, in order, with its signal. */
+  sessionPromptCalls: (SessionPromptCall & { signal?: AbortSignal })[]
+  /** The child sessions the fake `session.list` returns. */
+  setSessions(sessions: readonly FakeSession[]): void
 }
 
 function fakeHost(
@@ -109,10 +157,13 @@ function fakeHost(
   const tools: FakeToolDefinition[] = []
   const permissionCalls: PermissionCall[] = []
   const diffCalls: (VcsDiffCall & { signal?: AbortSignal })[] = []
+  const sessionListCalls: (SessionListCall & { signal?: AbortSignal })[] = []
+  const sessionPromptCalls: (SessionPromptCall & { signal?: AbortSignal })[] = []
   let namespace: { name: string; description?: string } | undefined
   let denial: string | undefined
   let diffFiles: readonly DiffFile[] = []
   let diffError: Error | undefined
+  let sessions: readonly FakeSession[] = []
 
   const context: FakeContext = {
     location: { directory, project },
@@ -144,6 +195,19 @@ function fakeHost(
         return { location: { directory }, data: diffFiles }
       },
     },
+    session: {
+      async list(input, options) {
+        sessionListCalls.push({ ...input, signal: options?.signal })
+        // The fake returns the configured records unfiltered, so the tool's
+        // own parent/agent/archive filtering is exercised rather than trusted
+        // to the service.
+        return { data: [...sessions], cursor: {} }
+      },
+      async prompt(input, options) {
+        sessionPromptCalls.push({ ...input, signal: options?.signal })
+        return { id: "inbox_test" }
+      },
+    },
     tool: {
       async transform(callback) {
         callback({
@@ -173,12 +237,36 @@ function fakeHost(
     failDiff(message) {
       diffError = new Error(message)
     },
+    sessionListCalls,
+    sessionPromptCalls,
+    setSessions(next) {
+      sessions = next
+    },
   }
 }
 
 /** One fake working-diff entry, with the defaults a test usually needs. */
 function diffFile(file: string, status: DiffFile["status"] = "modified"): DiffFile {
   return { file, patch: "", additions: 1, deletions: 0, status }
+}
+
+/** One fake child session, parented to the running tool's test session. */
+function childSession(
+  id: string,
+  updated: number,
+  agent = "core-developer",
+  options: { parentID?: string; created?: number; archived?: number } = {},
+): FakeSession {
+  return {
+    id,
+    parentID: options.parentID ?? "ses_test",
+    agent,
+    time: {
+      created: options.created ?? updated,
+      updated,
+      ...(options.archived === undefined ? {} : { archived: options.archived }),
+    },
+  }
 }
 
 async function runTool(
@@ -237,7 +325,7 @@ function probeFixture(rosterBeside = false): { root: string; agents: string; ros
 
 // ---------------------------------------------------------------- tests
 
-test("setup registers the seven wippa tools in the wippa namespace", async () => {
+test("setup registers the eight wippa tools in the wippa namespace", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -245,11 +333,26 @@ test("setup registers the seven wippa tools in the wippa namespace", async () =>
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     host.tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff", "plan_update"],
+    [
+      "subagent_search",
+      "subagent_get",
+      "subagent_list",
+      "subagent_invalid",
+      "subagent_continue",
+      "verify",
+      "diff",
+      "plan_update",
+    ],
   )
   for (const tool of host.tools) {
     const permission =
-      tool.name === "verify" ? "verify" : tool.name === "plan_update" ? "plan_update" : undefined
+      tool.name === "verify"
+        ? "verify"
+        : tool.name === "plan_update"
+          ? "plan_update"
+          : tool.name === "subagent_continue"
+            ? "subagent_continue"
+            : undefined
     const expected =
       permission === undefined
         ? { namespace: "wippa", codemode: false }
@@ -262,11 +365,18 @@ test("setup registers the seven wippa tools in the wippa namespace", async () =>
     "query",
   ])
   assert.deepEqual(host.tools.find((tool) => tool.name === "verify")?.input.required, ["command"])
+  assert.deepEqual(host.tools.find((tool) => tool.name === "subagent_continue")?.input.required, [
+    "agent",
+    "prompt",
+  ])
+  const continueTool = host.tools.find((tool) => tool.name === "subagent_continue")
+  assert.deepEqual(Object.keys(continueTool?.input.properties ?? {}).sort(), ["agent", "prompt"])
+  assert.equal(continueTool?.input.additionalProperties, false, "no session id or path is accepted")
 
   assert.equal(host.namespace()?.name, "wippa")
   assert.equal(
     host.namespace()?.description,
-    "Find, inspect and refresh the wippaAGENT subagent catalog, run acceptance commands with a real exit code, and read diffs as structured files.",
+    "Find, inspect and refresh the wippaAGENT subagent catalog, continue the latest session of a named subagent, run acceptance commands with a real exit code, and read diffs as structured files.",
   )
 })
 
@@ -376,6 +486,113 @@ test("a non-string query, id or category is treated as absent, not coerced", asy
   const list = await runTool(host, "subagent_list", { category: 7 })
   assert.match(list, /## Probe Group \(3\)/)
   assert.match(list, /`probe-alpha`/)
+})
+
+test("subagent_continue resumes the newest child session of the named agent", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.setSessions([
+    childSession("ses_old", 100),
+    childSession("ses_middle", 200),
+    childSession("ses_newest", 300),
+  ])
+  await setup(host.context)
+
+  const controller = new AbortController()
+  const prompt = "Continue the guard work.\nKeep the diff small."
+  const content = await runTool(
+    host,
+    "subagent_continue",
+    { agent: "core-developer", prompt },
+    controller.signal,
+  )
+
+  assert.deepEqual(JSON.parse(content), {
+    ok: true,
+    agent: "core-developer",
+    sessionID: "ses_newest",
+  })
+  assert.deepEqual(host.sessionListCalls, [
+    {
+      parentID: "ses_test",
+      order: "desc",
+      archived: false,
+      signal: controller.signal,
+    },
+  ])
+  assert.deepEqual(
+    host.sessionPromptCalls,
+    [{ sessionID: "ses_newest", text: prompt, signal: controller.signal }],
+    "the prompt text is forwarded unchanged to the newest child",
+  )
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.permissionCalls[0]?.action, "subagent_continue")
+  assert.deepEqual(host.permissionCalls[0]?.resources, ["core-developer"])
+  assert.deepEqual(host.permissionCalls[0]?.save, ["core-developer"])
+})
+
+test("subagent_continue ignores another agent's child and errors without prompting", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.setSessions([
+    childSession("ses_debugger", 900, "debugger"),
+    childSession("ses_elsewhere", 1_000, "core-developer", { parentID: "ses_other" }),
+    childSession("ses_archived", 1_100, "core-developer", { archived: 1 }),
+  ])
+  await setup(host.context)
+
+  const content = await runTool(host, "subagent_continue", {
+    agent: "core-developer",
+    prompt: "Continue.",
+  })
+  const result = JSON.parse(content)
+
+  assert.match(result.error, /no child session was found/)
+  assert.match(result.error, /core-developer/)
+  assert.equal(host.sessionPromptCalls.length, 0, "no unrelated or archived session was prompted")
+  assert.equal(host.permissionCalls.length, 1, "the assertion still ran before the lookup")
+  assert.equal(host.sessionListCalls.length, 1)
+})
+
+test("a denied subagent_continue permission prevents both list and prompt", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  host.setSessions([childSession("ses_newest", 300)])
+  host.denyPermission("denied by rule")
+  await setup(host.context)
+
+  await assert.rejects(
+    () =>
+      runTool(host, "subagent_continue", {
+        agent: "core-developer",
+        prompt: "Continue.",
+      }),
+    /denied by rule/,
+  )
+  assert.equal(host.permissionCalls.length, 1)
+  assert.equal(host.sessionListCalls.length, 0)
+  assert.equal(host.sessionPromptCalls.length, 0)
+})
+
+test("subagent_continue refuses an empty agent or prompt before any permission call", async () => {
+  const { root } = probeFixture()
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  for (const input of [
+    { agent: "", prompt: "Continue." },
+    { agent: "core-developer", prompt: "" },
+    { agent: "   ", prompt: "Continue." },
+    { agent: "core-developer", prompt: "   " },
+    { agent: 42, prompt: "Continue." },
+    { agent: "core-developer", prompt: 42 },
+  ]) {
+    const result = JSON.parse(await runTool(host, "subagent_continue", input))
+    assert.match(result.error, /must be a non-empty string/)
+  }
+  assert.equal(host.permissionCalls.length, 0)
+  assert.equal(host.sessionListCalls.length, 0)
+  assert.equal(host.sessionPromptCalls.length, 0)
 })
 
 test("verify runs an acceptance command and returns the verdict as JSON", async () => {
@@ -540,7 +757,7 @@ test("verify propagates a denied permission instead of running the command", asy
   )
 })
 
-test("verify and plan_update declare their own permission actions and no other tool does", async () => {
+test("verify, plan_update and subagent_continue declare their own permission actions and no other tool does", async () => {
   const { root } = probeFixture()
   const host = fakeHost(root)
   await setup(host.context)
@@ -548,6 +765,14 @@ test("verify and plan_update declare their own permission actions and no other t
   const declared = new Map(host.tools.map((tool) => [tool.name, tool.options?.permission]))
   assert.equal(declared.get("verify"), "verify")
   assert.equal(declared.get("plan_update"), "plan_update")
+  assert.equal(declared.get("subagent_continue"), "subagent_continue")
+  assert.deepEqual(
+    host.tools
+      .filter((tool) => tool.options?.permission === "subagent_continue")
+      .map((tool) => tool.name),
+    ["subagent_continue"],
+    "only the continuation tool declares subagent_continue",
+  )
   for (const name of ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "diff"]) {
     assert.equal(declared.get(name), undefined, `${name} declares no permission`)
   }
@@ -654,6 +879,253 @@ test("verify runs normally when the working diff changes no harness", async () =
   assert.equal(result.harnessChanges, undefined)
   assert.equal(result.harnessCheck, undefined)
   assert.equal(host.diffCalls.length, 1)
+})
+
+test("verify follows an npm script to the harness it runs", async () => {
+  const { root } = probeFixture()
+  // `npm test` runs `make check`; the changed Makefile is reached only
+  // through package.json, so the direct classification cannot see it.
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { test: "make check" } }),
+    "utf8",
+  )
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("Makefile"), diffFile("src/a.ts")])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "npm test" }))
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "harness-modified")
+  assert.deepEqual(result.harnessChanges, ["Makefile"])
+  assert.match(result.stderr, /Makefile/)
+  assert.equal(result.stdout, "")
+  assert.equal(host.diffCalls.length, 1)
+})
+
+test("verify reads the npm manifest from the working directory, not the workspace root", async () => {
+  const { root } = probeFixture()
+  mkdirSync(join(root, "sub"), { recursive: true })
+  // npm runs in `sub`, so `sub/package.json` is the manifest npm reads. The
+  // root entry is benign on purpose: reading it instead would miss the
+  // Makefile and spawn the real `npm test`, which runs `make check` in `sub`.
+  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: "true" } }), "utf8")
+  writeFileSync(join(root, "sub", "package.json"), JSON.stringify({ scripts: { test: "make check" } }), "utf8")
+  writeFileSync(join(root, "sub", "Makefile"), "check:\n\t@touch sub-ran\n", "utf8")
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("sub/Makefile"), diffFile("src/a.ts")])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "npm test", cwd: "sub" }))
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "harness-modified")
+  assert.deepEqual(result.harnessChanges, ["sub/Makefile"])
+  assert.match(result.stderr, /sub\/Makefile/)
+  assert.equal(result.stdout, "")
+  assert.equal(existsSync(join(root, "sub", "sub-ran")), false, "the refused script was not spawned")
+})
+
+test("verify follows chained, prefixed, option-shaped and quoted npm script bodies", async () => {
+  const cases: readonly {
+    readonly label: string
+    readonly scripts: Record<string, string>
+    readonly command: string
+  }[] = [
+    {
+      label: "a chained script body",
+      scripts: { test: "npm run a && npm run b", a: "true", b: "make check" },
+      command: "npm test",
+    },
+    {
+      label: "an environment prefix",
+      scripts: { test: "NODE_ENV=test npm run b", b: "make check" },
+      command: "npm test",
+    },
+    {
+      label: "a long option before the script name",
+      scripts: { build: "make check" },
+      command: "npm run --silent build",
+    },
+    {
+      label: "a short option before the script name",
+      scripts: { build: "make check" },
+      command: "npm run -s build",
+    },
+    {
+      label: "a value-taking option before the script name",
+      scripts: { build: "make check" },
+      command: "npm run --workspace pkg build",
+    },
+    {
+      label: "a quoted script name with a space",
+      scripts: { "build step": "make check" },
+      command: 'npm run "build step"',
+    },
+  ]
+
+  for (const { label, scripts, command } of cases) {
+    const { root } = probeFixture()
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }), "utf8")
+    const host = fakeHost(root)
+    host.setDiffFiles([diffFile("Makefile")])
+    await setup(host.context)
+
+    const result = JSON.parse(await runTool(host, "verify", { command }))
+
+    assert.equal(result.ok, false, label)
+    assert.equal(result.exitCode, -1, label)
+    assert.equal(result.reason, "harness-modified", label)
+    assert.deepEqual(result.harnessChanges, ["Makefile"], label)
+    assert.equal(result.stdout, "", label)
+    assert.match(result.stderr, /Makefile/, label)
+  }
+})
+
+test("verify walks up to the npm manifest above the working directory", async () => {
+  const { root } = probeFixture()
+  mkdirSync(join(root, "sub"), { recursive: true })
+  // `sub` has no manifest of its own, so npm resolves the root one. The root
+  // script runs `make check`, which only the indirect lookup can see.
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { test: "make check" } }),
+    "utf8",
+  )
+  writeFileSync(join(root, "Makefile"), "check:\n\t@touch ran\n", "utf8")
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("Makefile"), diffFile("src/a.ts")])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "npm test", cwd: "sub" }))
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "harness-modified")
+  assert.deepEqual(result.harnessChanges, ["Makefile"])
+  assert.equal(result.stdout, "")
+  assert.equal(result.durationMs, 0)
+  assert.match(result.stderr, /Makefile/)
+  assert.equal(existsSync(join(root, "ran")), false, "the refused script was not spawned")
+})
+
+test("verify follows an npm workspace selection to the workspace script", async () => {
+  const { root } = probeFixture()
+  mkdirSync(join(root, "pkg"), { recursive: true })
+  // The root scripts are benign; only the selected workspace's script names
+  // `make check`, so a lookup that stays on the root manifest would miss it.
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      private: true,
+      workspaces: ["pkg"],
+      scripts: { test: "true", build: "true" },
+    }),
+    "utf8",
+  )
+  writeFileSync(
+    join(root, "pkg", "package.json"),
+    JSON.stringify({ name: "pkg", scripts: { test: "make check", build: "make check" } }),
+    "utf8",
+  )
+  writeFileSync(join(root, "pkg", "Makefile"), "check:\n\t@touch ran\n", "utf8")
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("pkg/Makefile")])
+  await setup(host.context)
+
+  for (const command of [
+    "npm run --workspace pkg build",
+    "npm test --workspace pkg",
+    "npm test --workspace=pkg",
+    "npm test --workspaces",
+    "npm test --workspaces=true",
+    "npm test -w pkg",
+    "npm test -w=pkg",
+  ]) {
+    const result = JSON.parse(await runTool(host, "verify", { command }))
+
+    assert.equal(result.ok, false, command)
+    assert.equal(result.exitCode, -1, command)
+    assert.equal(result.reason, "harness-modified", command)
+    assert.deepEqual(result.harnessChanges, ["pkg/Makefile"], command)
+    assert.equal(result.stdout, "", command)
+    assert.equal(result.durationMs, 0, command)
+    assert.equal(existsSync(join(root, "pkg", "ran")), false, "the refused script was not spawned")
+  }
+  assert.equal(host.permissionCalls.length, 7)
+  assert.equal(host.diffCalls.length, 7)
+})
+
+test("verify expands a wildcard npm workspace pattern for --workspaces", async () => {
+  const { root } = probeFixture()
+  mkdirSync(join(root, "packages"), { recursive: true })
+  for (const name of ["one", "two"]) {
+    mkdirSync(join(root, "packages", name), { recursive: true })
+    writeFileSync(
+      join(root, "packages", name, "package.json"),
+      JSON.stringify({ scripts: { test: "make check" } }),
+      "utf8",
+    )
+    writeFileSync(join(root, "packages", name, "Makefile"), "check:\n\t@touch ran\n", "utf8")
+  }
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({ private: true, workspaces: ["packages/*"], scripts: { test: "true" } }),
+    "utf8",
+  )
+  const host = fakeHost(root)
+  host.setDiffFiles([diffFile("packages/one/Makefile"), diffFile("packages/two/Makefile")])
+  await setup(host.context)
+
+  const result = JSON.parse(await runTool(host, "verify", { command: "npm test --workspaces" }))
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, -1)
+  assert.equal(result.reason, "harness-modified")
+  assert.deepEqual([...result.harnessChanges].sort(), [
+    "packages/one/Makefile",
+    "packages/two/Makefile",
+  ])
+  assert.equal(result.stdout, "")
+  assert.equal(result.durationMs, 0)
+  for (const name of ["one", "two"]) {
+    assert.equal(
+      existsSync(join(root, "packages", name, "ran")),
+      false,
+      "the refused script was not spawned",
+    )
+  }
+})
+
+test("verify follows npm script bodies split by semicolons, pipes and or-chains", async () => {
+  const cases: readonly { readonly label: string; readonly body: string }[] = [
+    { label: "a semicolon", body: "true; make check" },
+    { label: "a pipe", body: "true | make check" },
+    { label: "an && chain", body: "true && make check" },
+    { label: "an || chain", body: "false || make check" },
+  ]
+
+  for (const { label, body } of cases) {
+    const { root } = probeFixture()
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { test: body } }), "utf8")
+    writeFileSync(join(root, "Makefile"), "check:\n\t@touch ran\n", "utf8")
+    const host = fakeHost(root)
+    host.setDiffFiles([diffFile("Makefile")])
+    await setup(host.context)
+
+    const result = JSON.parse(await runTool(host, "verify", { command: "npm test" }))
+
+    assert.equal(result.ok, false, label)
+    assert.equal(result.exitCode, -1, label)
+    assert.equal(result.reason, "harness-modified", label)
+    assert.deepEqual(result.harnessChanges, ["Makefile"], label)
+    assert.equal(result.stdout, "", label)
+    assert.equal(result.durationMs, 0, label)
+    assert.equal(existsSync(join(root, "ran")), false, label)
+  }
 })
 
 test("a failed working-diff read skips the harness check instead of blocking the run", async () => {
@@ -924,6 +1396,32 @@ test("updatePlan refuses to write through a dangling symbolic link", async () =>
     error: "refusing to write to a symbolic link at .opencode/PLAN.md",
   })
   assert.equal(existsSync(target), false)
+})
+
+test("updatePlan refuses to write through a hard link", async () => {
+  const { root } = probeFixture()
+  const outside = mkdtempSync(join(tmpdir(), "wippa-plan-outside-"))
+  const target = join(outside, "outside.txt")
+  writeFileSync(target, "outside content\n", "utf8")
+  mkdirSync(join(root, ".opencode"), { recursive: true })
+  // A hard link is the same inode under another name: writing the workspace
+  // path would overwrite the outside file, and there is no symlink to refuse.
+  linkSync(target, join(root, ".opencode", "PLAN.md"))
+
+  const host = fakeHost(root)
+  await setup(host.context)
+
+  const resultJson = await runTool(host, "plan_update", { content: "# Malicious plan\n" })
+  assert.deepEqual(JSON.parse(resultJson), {
+    error: "refusing to write to a hard link at .opencode/PLAN.md",
+  })
+  assert.equal(readFileSync(target, "utf8"), "outside content\n")
+
+  const directResult = updatePlan(root, "# Direct overwrite\n")
+  assert.deepEqual(directResult, {
+    error: "refusing to write to a hard link at .opencode/PLAN.md",
+  })
+  assert.equal(readFileSync(target, "utf8"), "outside content\n")
 })
 
 test("updatePlan refuses a .opencode directory that is a symbolic link", async () => {

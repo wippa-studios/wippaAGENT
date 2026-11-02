@@ -39,8 +39,7 @@ with a reason before anything spawns. The list is `npm` with only `test`,
 that position fails closed, so `npm pkg set`, `npm config set` and
 `npm --yes exec` are refused, and options that select another shell or config
 are refused: `--script-shell`, `--shell`, `--prefix`, `--userconfig` and
-`--globalconfig` (exact spellings; single-dash and abbreviated spellings are
-a known gap)); `git` with only `status`, `log`,
+`--globalconfig`); `git` with only `status`, `log`,
 `diff`, `show`, `blame`, `ls-remote`, `rev-parse`, `describe`, `grep`,
 `shortlog`, `fetch`, plus `branch` and `remote` in pure-listing form
 (`branch` accepts only `-a -r -v -vv -l --list --all --show-current` and no
@@ -104,15 +103,14 @@ with the file list and refuses to run unless the caller passes
 `harnessCheck: "skipped"`. That check is a heuristic file match, not a
 sandbox.
 
-The guard matches each option as written. Five spellings still reach a
-program or configuration it cannot inspect: a git exec-channel option
-abbreviated (`--up` for `--upload-pack`); an npm option written with one dash
-or abbreviated (`-script-shell`, `--script`); a make command-line assignment
-with whitespace before `=` (`'MAKEFILES =file'`); a pytest `@argfile` used as
-an option value (`-k @file`); and a brace expression whose closing quote hides
-the closing brace, on hosts whose `/bin/sh` expands braces. These are open
-findings from the second security review and are not covered by the
-fail-closed claim.
+The guard matches git and npm long options by unambiguous prefix, so an
+abbreviated option is refused as the option it names rather than passed
+through. It refuses make command-line assignments including whitespace and the
+`!=` operator, refuses pytest argument files in positional and option-value
+form, and refuses a quoted closing brace. The remaining harness gaps are the
+four named in the README note: an outside-repo path named on the command line,
+a harness committed before the working diff, an included makefile without a
+`.mk` suffix, and a custom unittest `-p` pattern.
 
 After the guard, the tool asserts a `verify` permission action with the
 command as its resource before spawning anything, so a deny rule for `verify`
@@ -133,8 +131,13 @@ characters are refused with a stated error.
 
 `wippa_plan_update` takes no path argument and writes exactly
 `<workspace>/.opencode/PLAN.md`. A symlink at that path or at the `.opencode`
-directory, dangling or not, is refused before the write, and the
-`plan_update` permission is asserted first.
+directory, dangling or not, or a hard link at that path, is refused before the
+write, and the `plan_update` permission is asserted first.
+
+`wippa_subagent_continue` takes only an agent id and a prompt. It resolves a
+child of the current session, asserts `subagent_continue` before listing
+anything, and cannot name an arbitrary session: there is no session id, parent
+id or path in its input.
 
 ## Token scope for the github MCP server
 

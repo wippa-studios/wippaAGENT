@@ -190,7 +190,7 @@ test("the plugin object is a real Plugin.Plugin and registers its tools through 
   assert.equal(plugin.id, "wippa-subagent-tools")
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "verify", "diff", "plan_update"],
+    ["subagent_search", "subagent_get", "subagent_list", "subagent_invalid", "subagent_continue", "verify", "diff", "plan_update"],
   )
   assert.equal(namespace()?.name, "wippa")
   assert.ok((namespace()?.description ?? "").length > 0)

@@ -10,16 +10,32 @@
  * contents of a harness file, and an acknowledged harness still runs with the
  * authority of the user running OpenCode.
  *
- * Three gaps remain because closing them needs file contents or history this
- * classifier does not read. (a) A harness reached indirectly through an npm
- * script: `npm test` runs whatever `package.json` names, so a `node` or
- * `pytest` command inside that script is invisible here; the manifest itself
- * is matched, which is why the script body is covered only as far as the
- * `package.json` diff goes. (b) A path named on the command line that lives
+ * Four gaps remain because closing them needs file contents or history this
+ * classifier does not read. (a) A path named on the command line that lives
  * outside the repository: the diff lists repository-relative files, so a
- * runner pointed at a file outside the repository matches nothing. (c) A
+ * runner pointed at a file outside the repository matches nothing. (b) A
  * committed harness: the diff is the working diff against HEAD, so a harness
  * file committed before that diff started is not in the file list at all.
+ * (c) An included makefile without a `.mk` suffix: the classifier matches the
+ * top-level makefile spellings and `*.mk`, not a file the Makefile includes
+ * by another name. (d) A custom unittest `-p` pattern: discovery can be
+ * pointed at names the default `test*.py` pattern does not match.
+ *
+ * An npm script body is the one indirection this classifier follows: when the
+ * caller can read the manifest npm resolves, `npm test`, `npm start` and
+ * `npm run <script>` are classified again against the script body, at most
+ * two levels deep. The manifest is the nearest `package.json` from the working
+ * directory up to the workspace root, so a command run in a subdirectory
+ * without its own manifest still follows the root script; `--workspace` and
+ * `--workspaces` select the manifests the root `workspaces` field lists,
+ * including a `packages/*`-style pattern expanded with one directory read. A
+ * body is split on `&&`, `||`, `;` and `|` outside quotes, an over-approximate
+ * shell parse: a false positive asks for acknowledgement, while a false
+ * negative would run unchecked. Every npm segment of a body is followed,
+ * including one behind a leading `NAME=value` environment word or npm
+ * options, and a quoted script name is one word. A script body reached
+ * through another shell, or deeper than two levels, is not inspected; the
+ * `package.json` entry itself is a harness.
  */
 
 /** The runners whose files this classifier knows. */
@@ -314,6 +330,7 @@ const RUNNER_MATCHERS: Readonly<Record<HarnessRunner, (path: string) => boolean>
       base === "package.json" ||
       base === "package-lock.json" ||
       base === "npm-shrinkwrap.json" ||
+      base === ".npmrc" ||
       /\.(?:test|spec)\.[^/]+$/.test(base) ||
       underDirectory(path, TEST_DIRECTORIES)
     )

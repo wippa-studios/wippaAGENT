@@ -30,11 +30,12 @@
  *    install/publish/exec subcommands, npm's subcommand position (the
  *    subcommand must immediately follow `npm`; any option in that position
  *    fails closed), and — in a segment whose command word is `git` — git's
- *    global options in both `--flag` and `--flag=value` form, git's
- *    exec-channel options (`--upload-pack`, `--open-files-in-pager`,
- *    `--ext-diff`, `--textconv`), any argument containing `::` (transport
- *    syntax such as `ext::cmd`), mutating subcommands and each
- *    subcommand's argument rules.
+ *    global options in `--flag` and `--flag=value` form and at any
+ *    unambiguous long-option prefix (`--up` reaches `--upload-pack`), git's
+ *    exec-channel options (`--upload-pack`, `--open-files-in-pager` and its
+ *    short form `-O`, `--ext-diff`, `--textconv`), any argument containing
+ *    `::` (transport syntax such as `ext::cmd`), mutating subcommands and
+ *    each subcommand's argument rules.
  * 4. Per-command flag policies — `sort` and `uniq` accept only the options
  *    named in their read-only flag allowlist, so `-o` truncates nothing and
  *    `--compress-program` executes nothing; `rg` refuses `--pre` and
@@ -46,14 +47,20 @@
  *    every option token must be named in that runner's table, an option with
  *    a value consumes exactly that value (and the value may not begin with
  *    `-`, so `cargo check --target --config=…` cannot smuggle a second
- *    option through the first one's value slot), and the subcommands and
- *    python modules are closed sets. A bare `--` is refused unless the
+ *    option through the first one's value slot), a value pattern an option
+ *    names is enforced (`cargo --target` refuses a path or a `.json` target
+ *    spec), and the subcommands and python modules are closed sets. A bare
+ *    `--` is refused unless the
  *    subcommand names a post-`--` allowlist. For `make`, every positional
- *    word matching `NAME=` is refused as a command-line variable assignment
- *    (`MAKEFILES=…` loads another makefile, `SHELL=…` picks the recipe
- *    shell); for `pytest`, directly or through `python -m pytest`, every
- *    positional word beginning `@` is refused as an argument file that
- *    expands options the guard cannot see.
+ *    word matching an assignment (`=` and the `:=`, `::=`, `:::=`, `+=`,
+ *    `?=` and `!=` operators, with leading whitespace and whitespace before
+ *    the operator, as make trims it) is refused as a command-line variable
+ *    assignment (`MAKEFILES=…` loads another makefile, `SHELL=…` picks the
+ *    recipe shell); for `pytest`, directly or through `python -m pytest`, a
+ *    token in an argument-file spelling (`@file`, `=@file`, `-k@file`) is
+ *    refused as an argument file that expands options the guard cannot see,
+ *    while an `@` anywhere else — a test path or a keyword expression — is
+ *    data and passes.
  * 5. `install.sh` may only run with `--dry-run`, and only from the command
  *    word that would execute it (`./install.sh`, or a shell or `shellcheck`
  *    naming it): `bash -n install.sh` and `shellcheck install.sh` pass as
@@ -75,7 +82,8 @@
  * and `uniq`'s read-only flag allowlists, `rg`'s denied `--pre` flags,
  * `bash`'s positional rule and npm's five named options
  * (`--script-shell`, `--shell`, `--prefix`, `--userconfig`,
- * `--globalconfig`). An option no rule names is passed through to those
+ * `--globalconfig`, including their single-dash and abbreviated spellings).
+ * An option no rule names is passed through to those
  * commands — git's read-only options, `grep` flags, `head`/`tail` ranges,
  * npm options after the subcommand other than those five, and `git fetch`
  * contacting the network all reach the command itself, under the user's own
@@ -121,6 +129,45 @@ const DENIED_CHARACTERS: readonly (readonly [string, string])[] = [
  */
 function hasLoneAmpersand(command: string): boolean {
   return command.replaceAll("&&", "").includes("&")
+}
+
+/**
+ * Finds the `}` that closes an unquoted `{`, tracking quote state from the
+ * opening brace. `pytest {x"}"y,-p}` has a `}` inside double quotes and a
+ * real close after it; `indexOf("}")` would stop at the quoted one and let
+ * the comma past the brace rule. Escapes inside double quotes follow the same
+ * rule as `unquotedMetacharacter`: a backslash escapes only `$`, a backtick,
+ * `"`, `\` or a newline. A `{` with no closing `}` outside quotes is literal
+ * in the shell, so the caller leaves it alone.
+ */
+function closingBrace(command: string, open: number): number | undefined {
+  let quote: '"' | "'" | undefined
+  for (let index = open + 1; index < command.length; index++) {
+    const character = command[index]!
+    if (quote === "'") {
+      if (character === "'") quote = undefined
+      continue
+    }
+    if (quote === '"') {
+      if (character === '"') {
+        quote = undefined
+        continue
+      }
+      if (character === "\\") {
+        const next = command[index + 1]
+        if (next === "$" || next === "`" || next === '"' || next === "\\" || next === "\n") {
+          index += 1
+        }
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === "}") return index
+  }
+  return undefined
 }
 
 /**
@@ -173,8 +220,10 @@ function unquotedMetacharacter(command: string): string | undefined {
       // Only a real brace expansion is refused. `{}` (as in `find -exec …
       // {}`) and `{a}` are literal in the shell, and denying them would
       // shadow the more specific rules that already refuse those commands.
-      const close = command.indexOf("}", index + 1)
-      if (close !== -1) {
+      // The close must be found with quote tracking: a `}` inside quotes is
+      // data, so `{x"}"y,-p}` must still see the comma after it.
+      const close = closingBrace(command, index)
+      if (close !== undefined) {
         const body = command.slice(index + 1, close)
         if (body.includes(",") || body.includes("..")) {
           return "denied character: unquoted brace expansion (synthesises words the guard cannot see)"
@@ -454,6 +503,23 @@ function flagMatches(word: string, flag: string): boolean {
   return word.startsWith(flag)
 }
 
+/**
+ * Git accepts any unambiguous prefix of a long option, so `--up=…` reaches
+ * `--upload-pack` and runs the named program. A long token therefore matches
+ * a denied name when the denied name starts with the token's head (the part
+ * before `=`); the head must be longer than the two dashes, so `--u` matches
+ * and a bare `--` does not. Short options keep `flagMatches`' rule: git does
+ * not abbreviate them, and the bundle form (`-cfoo`) is still refused.
+ */
+function gitOptionMatches(token: string, option: string): boolean {
+  if (!option.startsWith("--")) return flagMatches(token, option)
+  if (!token.startsWith("--")) return false
+  const equals = token.indexOf("=")
+  const head = equals === -1 ? token : token.slice(0, equals)
+  if (head.length < 3) return false
+  return option.startsWith(head)
+}
+
 // --------------------------------------------------------------------- git
 
 /** Git subcommands that write refs, history, config or the working tree. */
@@ -539,13 +605,16 @@ const GIT_DENIED_GLOBAL_OPTIONS: ReadonlySet<string> = new Set([
  * every `git` segment, in both `--flag` and `--flag=value` form:
  * `--upload-pack` spawns the named program locally (from `fetch` and from
  * `ls-remote`, which executes it without contacting a remote first),
- * `--open-files-in-pager` runs it from `git grep`, and `--ext-diff` /
- * `--textconv` run the diff driver and textconv filters the repository
- * config names.
+ * `--open-files-in-pager` runs it from `git grep` and its short form `-O`
+ * is the same option, and `--ext-diff` / `--textconv` run the diff driver and
+ * textconv filters the repository config names. `-O` is matched by the
+ * short-flag bundle rule, so the attached (`-O/bin/sh`), separate
+ * (`-O /bin/sh`) and bare forms are all refused.
  */
 const GIT_EXEC_CHANNEL_OPTIONS: readonly string[] = [
   "--upload-pack",
   "--open-files-in-pager",
+  "-O",
   "--ext-diff",
   "--textconv",
 ]
@@ -643,6 +712,23 @@ const NPM_DENIED_OPTIONS: readonly string[] = [
   "--globalconfig",
 ]
 
+/**
+ * npm accepts a long option with one or two leading dashes (`-script-shell=…`
+ * is `--script-shell=…`) and any unambiguous prefix (`--script=…`,
+ * `--prefi=…`). Normalise a dash-prefixed token to its option name — strip
+ * one or two dashes, cut at `=` — and return the denied option it abbreviates,
+ * or undefined. A name shorter than three characters is not matched: `-s` is
+ * npm's short silent flag, not the head of `--shell`.
+ */
+function npmDeniedOption(token: string): string | undefined {
+  if (!token.startsWith("-")) return undefined
+  const withoutDashes = token.startsWith("--") ? token.slice(2) : token.slice(1)
+  const equals = withoutDashes.indexOf("=")
+  const name = equals === -1 ? withoutDashes : withoutDashes.slice(0, equals)
+  if (name.length < 3) return undefined
+  return NPM_DENIED_OPTIONS.find((option) => option.slice(2).startsWith(name))
+}
+
 // -------------------------------------------------- polyglot runner policy
 
 /**
@@ -660,11 +746,12 @@ interface FlagSpec {
   /** When present, only these values are accepted (`node --test-reporter`). */
   readonly values?: ReadonlySet<string>
   /**
-   * When present on an `optional` flag, a separate word is consumed only if it
-   * matches. GNU make's `-j` takes an optional numeric argument but leaves a
-   * following target alone, so `make -j MAKEFILES=…` is an assignment, not a
-   * job count; the pattern keeps the word positional so the assignment rule
-   * sees it.
+   * When present, the option's value must match. On an `optional` flag a
+   * separate word is consumed only if it matches: GNU make's `-j` takes an
+   * optional numeric argument but leaves a following target alone, so
+   * `make -j MAKEFILES=…` is an assignment, not a job count. On a `value`
+   * flag the value is checked after it is consumed, so `cargo --target` can
+   * refuse a path to a custom target JSON whose linker field names a program.
    */
   readonly pattern?: RegExp
 }
@@ -850,11 +937,16 @@ const GO_FLAGS: FlagSet = flagSet({
 /**
  * Cargo's shared flags. `--config`, `-Z` and `--manifest-path` are absent:
  * each one can load configuration or a wrapper the guard cannot inspect.
+ * `--target` takes a triple or a built-in target name, not a path: a path to
+ * a custom target JSON names a `linker` program cargo will run, so the value
+ * is restricted to the characters a triple uses, and a value ending in
+ * `.json` is refused even without a slash — a bare `target.json` is a custom
+ * target spec, not a triple.
  */
 const CARGO_FLAGS: FlagSet = flagSet(
   {
     "--release": NO_VALUE,
-    "--target": TAKES_VALUE,
+    "--target": { arity: "value", pattern: /^(?!.*\.json$)[A-Za-z0-9_.-]+$/i },
     "--features": TAKES_VALUE,
     "--all-features": NO_VALUE,
     "--no-default-features": NO_VALUE,
@@ -1037,6 +1129,9 @@ function checkValue(
   if (spec.values !== undefined && !spec.values.has(value)) {
     return `denied \`${name}\` option: \`${display}\` (allowed values: ${[...spec.values].join(", ")})`
   }
+  if (spec.pattern !== undefined && !spec.pattern.test(value)) {
+    return `denied \`${name}\` option: \`${display}\` (value does not match \`${spec.pattern.source}\`)`
+  }
   return undefined
 }
 
@@ -1144,13 +1239,17 @@ type PositionalRule = (name: string, word: string) => string | undefined
 
 /**
  * `make MAKEFILES=…`, `make SHELL=…`: an assignment macro on the command
- * line. GNU make treats any word whose left-hand side is a variable name and
- * whose next characters are an assignment operator as an assignment, so the
- * plain `=`, `:=`, `::=`, `+=` and `?=` spellings all reach this pattern; the
- * name may contain `.` or `-` as make allows. A leading `-` is an option, not
- * an assignment, and is left to the flag table.
+ * line. GNU make trims leading blanks from every word and treats a word whose
+ * left-hand side is a variable name and whose next characters are an
+ * assignment operator as an assignment, so the `=`, `:=`, `::=`, `:::=`,
+ * `+=`, `?=` and `!=` spellings all reach this pattern, with or without
+ * leading whitespace; the name may contain `.` or `-` as make allows, and
+ * make trims whitespace between the name and the operator
+ * (`' MAKEFILES =evil.mk'` is one argv word after the shell strips the
+ * quotes). The name's first character may not be `:`, `#`, `=`, whitespace or
+ * `-`: those begin make syntax, a comment, or an option rather than a macro.
  */
-const MAKE_ASSIGNMENT = /^[^:#=\s-][^:#=\s]*(?:::|:|\+|\?)?=/
+const MAKE_ASSIGNMENT = /^\s*[^:#=\s-][^:#=\s]*\s*(?:\+=|\?=|!=|[:]{0,3}=)/
 
 /**
  * `make MAKEFILES=/tmp/evil.mk target` loads another makefile and
@@ -1166,16 +1265,43 @@ function makePositional(name: string, word: string): string | undefined {
 }
 
 /**
+ * Whether a word is an argument-file spelling pytest expands: the whole word
+ * is `@file`, the value follows `=` (`--deselect=@file`, `-k=@file`), or a
+ * short option carries the value directly (`-k@file`). An `@` anywhere else
+ * is data: `tests/@fixtures/test_x.py` and `-k name@example` name no file.
+ * The `=@` test covers the `-k=@file` form as well as the long options.
+ */
+function pytestArgumentFile(token: string): boolean {
+  return token.startsWith("@") || token.includes("=@") || /^-[A-Za-z]@/.test(token)
+}
+
+/**
  * `pytest @argfile` expands the file's contents into options, including the
  * plugin/config selectors (`-p`, `-c`, `-o`) the flag table refuses;
- * `python -m pytest @argfile` is the same command. Every positional word
- * beginning `@` is refused.
+ * `python -m pytest @argfile` is the same command. A positional word is
+ * refused only when it is an argument-file spelling, so a test path or a
+ * keyword expression containing `@` passes; `pytestToken` applies the same
+ * rule to option values, which this positional rule never sees.
  */
 function pytestPositional(name: string, word: string): string | undefined {
-  if (word.startsWith("@")) {
+  if (pytestArgumentFile(word)) {
     return `denied \`${name}\` argument file: \`${word}\` (\`@file\` expands options the guard cannot see)`
   }
   return undefined
+}
+
+/**
+ * pytest expands an argument file it finds in an option's value as well as in
+ * a positional, so `pytest -k @c.args` loads the file and can enable `-c`,
+ * `-o` and a plugin. The scan therefore covers every token, but only the
+ * argument-file spellings: the attached (`-k@file`), `=` (`--deselect=@file`)
+ * and bare (`@file`) forms. The name is the argv-facing one, `pytest` or
+ * `python3 -m pytest`.
+ */
+function pytestToken(name: string, token: string): string | undefined {
+  if (name !== "pytest" && !name.endsWith(" -m pytest")) return undefined
+  if (!pytestArgumentFile(token)) return undefined
+  return `denied \`${name}\` argument file: \`${token}\` (\`@file\` expands options the guard cannot see)`
 }
 
 /**
@@ -1194,6 +1320,13 @@ function checkRunnerFlags(
   subcommand: string | undefined,
   positional: PositionalRule | undefined,
 ): string | undefined {
+  // pytest's argument-file expansion works on option values too, so the scan
+  // covers every word up front rather than only the words the loop reaches:
+  // `pytest -k @file` consumes `@file` as `-k`'s value and would skip it.
+  for (let scan = start; scan < words.length; scan++) {
+    const argumentFile = pytestToken(name, words[scan]!)
+    if (argumentFile !== undefined) return argumentFile
+  }
   let postDoubleDash = false
   let index = start
   while (index < words.length) {
@@ -1379,13 +1512,13 @@ function guardSegment(words: string[]): string | undefined {
       // position.
       for (const token of words) {
         for (const option of GIT_DENIED_GLOBAL_OPTIONS) {
-          if (flagMatches(token, option)) {
-            return `denied git global option: \`${token}\` (git configuration and location are set outside the command)`
+          if (gitOptionMatches(token, option)) {
+            return `denied git global option: \`${token}\` (matches \`${option}\`; git configuration and location are set outside the command)`
           }
         }
         for (const option of GIT_EXEC_CHANNEL_OPTIONS) {
-          if (flagMatches(token, option)) {
-            return `denied git option: \`${token}\` (runs a program loaded from configuration or named in the argument)`
+          if (gitOptionMatches(token, option)) {
+            return `denied git option: \`${token}\` (matches \`${option}\`, which runs a program loaded from configuration or named in the argument)`
           }
         }
         if (token.includes("::")) {
@@ -1433,7 +1566,7 @@ function guardSegment(words: string[]): string | undefined {
       }
       if (GIT_OUTPUT_DENY.has(subcommand)) {
         for (const token of words.slice(2)) {
-          if (token.startsWith("--output")) {
+          if (gitOptionMatches(token, "--output")) {
             return `denied \`git ${subcommand} --output\`: writing a file from git is refused`
           }
         }
@@ -1463,10 +1596,9 @@ function guardSegment(words: string[]): string | undefined {
         return `denied npm subcommand: \`${subcommand}\` (only test, run and ls pass)`
       }
       for (const token of words.slice(2)) {
-        for (const option of NPM_DENIED_OPTIONS) {
-          if (flagMatches(token, option)) {
-            return `denied npm option: \`${option}\` (changes the script shell, the prefix or the npm configuration)`
-          }
+        const option = npmDeniedOption(token)
+        if (option !== undefined) {
+          return `denied npm option: \`${option}\` (changes the script shell, the prefix or the npm configuration)`
         }
       }
     }

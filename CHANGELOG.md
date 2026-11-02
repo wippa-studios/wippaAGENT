@@ -16,6 +16,9 @@ below.
 
 ### Added
 
+- `wippa_subagent_continue` in the plugin: it takes only an agent id and a prompt, resumes the newest child session of that subagent under the current session, accepts no session id input, asserts the `subagent_continue` permission before listing anything, and returns the session id as output only.
+- `scripts/opencode.sh` behind `npm run opencode`: runtime detection for `auto`, `node` and `bun`, a V8 heap cap for node through `NODE_OPTIONS`, and an opt-in `ulimit -v` address-space limit for bun.
+- `scripts/opencode-memory.sh` behind `npm run clean:opencode`: a read-only report by default, `--apply` for snapshot cleanup and log rotation, and `--vacuum --yes` for a consistent `.backup` with a random suffix at mode 600 before `wal_checkpoint(TRUNCATE)` and `VACUUM`.
 - Expanded eval scenario battery (01 through 08) covering polyglot test runners, high-risk auth recon, and two-iteration reviewer escalation, with coverage tables in `README.md` and `evals/README.md`.
 - `wippa_verify` now supports polyglot acceptance commands: `pytest`,
   `go test` and `go vet`, `cargo test`, `cargo check` and `cargo clippy`,
@@ -35,7 +38,12 @@ below.
 
 ### Fixed
 
-- Closed the first-round guard escapes: unquoted backslashes and glob expansion, dash-leading option values, make command-line variable assignments, positional pytest `@argfile`, a symlinked `.opencode` directory, out-of-workspace `cwd`, and exact npm script-shell options. Five residual spellings remain open after the second review: git and npm option abbreviations, make assignments with whitespace before `=`, pytest argfiles in option values, and quoted-brace expansion.
+- `cargo --target` now refuses a value ending in `.json`, so a bare `target.json` custom target spec cannot be passed where the guard expects a triple or built-in target name.
+- `wippa_plan_update` refuses a hard link at `.opencode/PLAN.md` in addition to a symlink, so a ledger path that aliases a file outside the workspace is not written through.
+- The `wippa_verify` harness surface includes `.npmrc` and follows the body of an npm script into the files it names.
+- `wippa_verify` resolves a relative `cwd` against the workspace rather than the server process directory, and refuses one that canonicalises outside it.
+- Delegation serialises same-agent dispatches, and a revision resumes the child through `wippa_subagent_continue` with the same agent id rather than opening a fresh session.
+- Closed the first-round guard escapes: unquoted backslashes and glob expansion, dash-leading option values, make command-line variable assignments, positional pytest `@argfile`, a symlinked `.opencode` directory, out-of-workspace `cwd`, and exact npm script-shell options. The third and fourth rounds closed the residual spellings: git and npm long options are matched by unambiguous prefix, make assignments are refused with leading whitespace and the `!=` operator, pytest argument files are refused in option values as well as positionally, and a quoted closing brace is refused.
 - `python3 -m` in `wippa_verify` accepts only `unittest` and `pytest`,
   including the attached `-munittest` form, and `cargo --config`, `-Z` and
   `--manifest-path` are refused.

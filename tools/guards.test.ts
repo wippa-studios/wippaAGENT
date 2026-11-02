@@ -71,6 +71,19 @@ test("denies unquoted glob and brace metacharacters while quoted patterns pass",
   assertAllowed('rg -n --glob "*.ts" pattern tools/')
 })
 
+test("a quoted closing brace does not end a brace expansion early", () => {
+  // The close must be found with quote tracking: `{x"}"y,-p}` has a quoted
+  // `}` and a comma after it, and `indexOf("}")` stopped at the quoted one.
+  assertDenied('pytest {x"}"y,-p}', "brace expansion")
+  assertDenied("pytest {x'}'y,-p}", "brace expansion")
+  assertDenied('pytest {"}"x,-p}', "brace expansion")
+  assertDenied("pytest {a,b}", "brace expansion")
+  assertDenied("pytest {1..3}", "brace expansion")
+  assertAllowed("pytest '{}'")
+  assertAllowed("pytest -k '{a,b}'")
+  assertAllowed("pytest {a}")
+})
+
 // ------------------------------------------------------- verdict integrity
 
 test("allows only && chains: no separators, no fallbacks, no backgrounding", () => {
@@ -276,6 +289,27 @@ test("a value-taking runner option does not consume a dash-leading token as its 
   assertAllowed("pytest -k unit")
 })
 
+test("cargo --target accepts a triple or built-in name, not a custom target path", () => {
+  // A target JSON has a linker field naming a program cargo would run, so the
+  // value is restricted to the characters a triple uses. A bare file name is
+  // still a file: `target.json` names a custom spec, so it is refused too.
+  for (const target of [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "wasm32-unknown-unknown",
+    "thumbv7em-none-eabihf",
+  ]) {
+    assertAllowed(`cargo test --target ${target}`)
+    assertAllowed(`cargo test --target=${target}`)
+  }
+  assertDenied("cargo test --target target.json", "value does not match")
+  assertDenied("cargo test --target=target.json", "value does not match")
+  assertDenied("cargo test --target target.JSON", "value does not match")
+  assertDenied("cargo test --target /tmp/target.json", "value does not match")
+  assertDenied("cargo test --target=/tmp/target.json", "value does not match")
+  assertDenied("cargo test --target=../target.json", "value does not match")
+})
+
 test("make refuses command-line variable assignments at every position", () => {
   // `MAKEFILES=…` loads another makefile and `SHELL=…` picks the recipe
   // shell; both are positional words, so the rule cannot stop at the first.
@@ -290,16 +324,67 @@ test("make refuses command-line variable assignments at every position", () => {
   assertDenied("make MAKEFILES:=/tmp/evil.mk test", "variable assignment")
   assertDenied("make MAKEFILES+=/tmp/evil.mk test", "variable assignment")
   assertDenied("make MAKEFILES.a=/tmp/evil.mk test", "variable assignment")
+  // A quoted whitespace-before-operator assignment is one argv word after the
+  // shell strips the quotes, and make trims the name before loading the file.
+  assertDenied("make 'MAKEFILES =evil.conf'", "variable assignment")
+  assertDenied("make 'SHELL =/tmp/evil'", "variable assignment")
+  assertDenied("make 'MAKEFLAGS =--eval=evil'", "variable assignment")
+  assertDenied("make 'FOO := bar'", "variable assignment")
+  assertDenied("make 'FOO += bar'", "variable assignment")
+  assertDenied("make 'FOO ?= bar'", "variable assignment")
+  // GNU make trims leading blanks and whitespace before the operator, and
+  // accepts `:::=` and the shell `!=` form. Each of these is one argv word
+  // after the shell strips the quotes.
+  assertDenied("make -n ' MAKEFILES=evil.conf' all", "variable assignment")
+  assertDenied("make '\tMAKEFILES=evil.conf' pwned", "variable assignment")
+  assertDenied("make 'MAKEFILES:::=evil.conf' pwned", "variable assignment")
+  assertDenied("make 'MAKEFILES !=echo evil.conf' pwned", "variable assignment")
+  assertDenied("make 'X !=touch /tmp/exmarker' probe", "variable assignment")
+  assertDenied("make 'FOO::=bar' test", "variable assignment")
+  assertDenied("make 'FOO!=bar' test", "variable assignment")
   assertAllowed("make test")
   assertAllowed("make -j4 test")
   assertAllowed("make -j 4 test")
+  assertAllowed("make check all")
+  assertAllowed("make -n test")
 })
 
 test("pytest refuses @argument files, directly and through python -m pytest", () => {
   assertDenied("python3 -m pytest @c3.txt -q", "argument file")
   assertDenied("pytest @c3.txt -q", "argument file")
+  assertDenied("pytest @file", "argument file")
   assertAllowed("pytest tests/")
   assertAllowed("python3 -m pytest -q")
+})
+
+test("pytest refuses an argument file in an option-value slot", () => {
+  // pytest expands the argfile in a value too, so `-k @c.args` loads options
+  // (`-c`, `-o`, a plugin) the flag table refuses to see.
+  for (const command of [
+    "pytest -k @c3.args",
+    "pytest -m @c3.args",
+    "pytest -k@c3.args",
+    "pytest -k=@c3.args",
+    "pytest --deselect=@file",
+    "pytest --ignore=@file",
+    "python3 -m pytest -k @file",
+    "python3 -m pytest --deselect=@file",
+  ]) {
+    assertDenied(command, "argument file")
+  }
+  assertAllowed("pytest -k unit")
+  assertAllowed("pytest tests/")
+  assertAllowed("python3 -m pytest -k unit")
+  assertAllowed("python3 -m pytest -q")
+})
+
+test("pytest treats an @ that is not an argument-file spelling as data", () => {
+  // Only `@file`, `=@file` and `-k@file` request expansion. A path segment or
+  // keyword expression that happens to contain `@` names no argument file.
+  assertAllowed("pytest tests/@fixtures/test_x.py")
+  assertAllowed("pytest -k name@example")
+  assertAllowed("pytest -k unit")
+  assertAllowed("python3 -m pytest -k unit")
 })
 
 test("npm refuses the options that redirect its script shell, prefix or configuration", () => {
@@ -314,6 +399,27 @@ test("npm refuses the options that redirect its script shell, prefix or configur
   }
   assertAllowed("npm test")
   assertAllowed("npm run typecheck")
+})
+
+test("npm refuses single-dash and abbreviated forms of the denied options", () => {
+  // npm accepts a long option with one dash and any unambiguous prefix, so
+  // the five names cannot be matched only in their `--name` spelling.
+  for (const command of [
+    "npm test -script-shell=/tmp/evil",
+    "npm test --script=/tmp/evil",
+    "npm test --prefi=/tmp",
+    "npm test --userconf=/tmp/npmrc",
+    "npm test --globalconf=/tmp/npmrc",
+    "npm test --script-shel=/tmp/evil",
+  ]) {
+    assertDenied(command, "denied npm option")
+  }
+  assertAllowed("npm test")
+  assertAllowed("npm run build")
+  assertAllowed("npm ls")
+  assertAllowed("npm test --silent")
+  assertAllowed("npm test -s")
+  assertAllowed("npm run build -- --check")
 })
 
 test("the polyglot runner policies are fail-closed flag allowlists", () => {
@@ -599,6 +705,14 @@ test("git's exec-channel options, =forms of globals and :: transport are refused
   assertDenied("git fetch origin --upload-pack id", "--upload-pack")
   assertDenied("git ls-remote --upload-pack ./x", "--upload-pack")
   assertDenied("git grep --open-files-in-pager id hello", "--open-files-in-pager")
+  // `-O` is the short form of --open-files-in-pager: attached, separate and
+  // bare forms all run the named program (or the one git's pager config names).
+  assertDenied("git grep -O/bin/sh -- hello", "-O")
+  assertDenied("git grep -O ./pg.sh -- hello", "-O")
+  assertDenied("git grep -O -- hello", "-O")
+  assertDenied("git grep -O", "-O")
+  assertAllowed("git grep -n hello")
+  assertAllowed("git grep hello")
   assertDenied("git diff --ext-diff HEAD", "--ext-diff")
   assertDenied("git blame --textconv file.ts", "--textconv")
   assertDenied("git log --git-dir /x", "git global option")
@@ -608,6 +722,35 @@ test("git's exec-channel options, =forms of globals and :: transport are refused
   assertAllowed("git log --oneline -3")
   assertAllowed("git fetch origin")
   assertAllowed("git remote show origin")
+})
+
+test("git long options match any unambiguous prefix, including exec channels and --output", () => {
+  // Git accepts a prefix of a long option: `--up=…` reaches --upload-pack,
+  // which runs the named program. Exact matching alone missed every form.
+  const denied: readonly (readonly [string, string])[] = [
+    ["git ls-remote --u=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --up=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upl=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upload-p=/tmp/pw origin", "--upload-pack"],
+    ["git ls-remote --upload-pack=/tmp/pw origin", "--upload-pack"],
+    ["git grep --open=echo hello", "--open-files-in-pager"],
+    ["git grep --open-files-in-pager=echo hello", "--open-files-in-pager"],
+    ["git diff --ext HEAD", "--ext-diff"],
+    ["git diff --ext-diff HEAD", "--ext-diff"],
+    ["git blame --textc f", "--textconv"],
+    ["git blame --textconv f", "--textconv"],
+    ["git show --out=/tmp/x HEAD", "--output"],
+    ["git diff --out /tmp/x HEAD", "--output"],
+    ["git log --outp=/tmp/x", "--output"],
+    ["git -c alias.pwn=id pwn", "git global option"],
+  ]
+  for (const [command, reasonPart] of denied) assertDenied(command, reasonPart)
+  // The read-only surface is untouched: none of these heads prefixes a denied
+  // long option.
+  assertAllowed("git log --oneline")
+  assertAllowed("git diff --stat")
+  assertAllowed("git show --name-only")
+  assertAllowed("git log --oneline -3")
 })
 
 test("sort and uniq accept only their read-only flag allowlist", () => {

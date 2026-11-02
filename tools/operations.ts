@@ -615,8 +615,16 @@ export function updatePlan(
       return { error: "refusing to write outside the workspace at .opencode" }
     }
     const planPath = join(dir, "PLAN.md")
-    if (lstatSync(planPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    const planStat = lstatSync(planPath, { throwIfNoEntry: false })
+    if (planStat?.isSymbolicLink()) {
       return { error: "refusing to write to a symbolic link at .opencode/PLAN.md" }
+    }
+    // A hard link has no symlink bit to refuse: the path *is* the outside
+    // inode, so a write through it changes the linked file. Link count above
+    // one means the same inode is reachable from another name; refuse rather
+    // than overwrite content the workspace does not own.
+    if (planStat !== undefined && planStat.nlink > 1) {
+      return { error: "refusing to write to a hard link at .opencode/PLAN.md" }
     }
     // O_NOFOLLOW closes the window between the lstat above and the open: a
     // symbolic link swapped in at PLAN.md is refused by the kernel (ELOOP)
