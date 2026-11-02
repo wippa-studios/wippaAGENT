@@ -585,6 +585,8 @@ To use the repository as a live OpenCode project, install it into the checkout:
 
 That creates `.opencode/` holding the agents, the skills and the tools plugin. With `--apply-config`, it also merges the required configuration keys into `.opencode/opencode.json`. `.opencode/` is gitignored, so a local install never pollutes the repository.
 
+Load the plugin in one scope only: the global install and a project `plugins` entry both register the same tools, and OpenCode reports one of them as failed. This checkout no longer lists `plugins`; use the global install or a project install, not both.
+
 One caveat: a project install flattens the agent files into `.opencode/agents/`, and the plugin's roster lookups prefer that installed copy over the live `categories/` tree. While the install is present, edits to `categories/*.md` do not show up in `wippa_subagent_*` results until you re-run the install with `--force` or remove the installed copy.
 
 </details>

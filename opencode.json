@@ -57,9 +57,6 @@
       }
     }
   },
-  "plugins": [
-    { "package": "./tools" }
-  ],
   "skills": [
     "./skills"
   ]
